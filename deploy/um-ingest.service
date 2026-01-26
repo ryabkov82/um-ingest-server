@@ -1,0 +1,31 @@
+[Unit]
+Description=UM Ingest Server
+After=network.target
+
+[Service]
+Type=simple
+User=um-ingest
+Group=um-ingest
+WorkingDirectory=/opt/um-ingest-server
+ExecStart=/opt/um-ingest-server/um-ingest-server
+Restart=always
+RestartSec=5
+
+Environment="ALLOWED_BASE_DIR=/data/incoming"
+Environment="PORT=8080"
+Environment="UM_INGEST_API_KEY=your-secret-key-here"
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/data/incoming /var/log
+
+# Resource limits
+LimitNOFILE=65536
+MemoryMax=2G
+
+[Install]
+WantedBy=multi-user.target
+

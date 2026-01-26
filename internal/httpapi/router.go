@@ -1,0 +1,42 @@
+package httpapi
+
+import (
+	"net/http"
+	"strings"
+)
+
+// SetupRouter sets up HTTP routes
+func SetupRouter(handler *Handler) http.Handler {
+	mux := http.NewServeMux()
+
+	// POST /jobs
+	mux.HandleFunc("/jobs", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			handler.CreateJob(w, r)
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+
+	// GET /jobs/{jobId}
+	// POST /jobs/{jobId}/cancel
+	mux.HandleFunc("/jobs/", func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		if strings.HasSuffix(path, "/cancel") {
+			if r.Method == http.MethodPost {
+				handler.CancelJob(w, r)
+			} else {
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			}
+		} else {
+			if r.Method == http.MethodGet {
+				handler.GetJobStatus(w, r)
+			} else {
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			}
+		}
+	})
+
+	return AuthMiddleware(mux)
+}
+
