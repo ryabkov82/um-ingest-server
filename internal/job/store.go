@@ -137,6 +137,20 @@ func (s *Store) UpdateSendProgress(id string, rowsSent, batchesSent int64) {
 	j.BatchesSent = batchesSent
 }
 
+// UpdateErrors updates error counters
+func (s *Store) UpdateErrors(id string, errorsTotal, errorsSent int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	j, ok := s.jobs[id]
+	if !ok {
+		return
+	}
+
+	j.ErrorsTotal = errorsTotal
+	j.ErrorsSent = errorsSent
+}
+
 // UpdateError updates job error message
 func (s *Store) UpdateError(id string, err error) {
 	s.mu.Lock()

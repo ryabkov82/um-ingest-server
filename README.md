@@ -103,12 +103,18 @@ export UM_INGEST_API_KEY=your-secret-key
   },
   "delivery": {
     "endpoint": "https://1c-host/hs/um_ingest/load_batch",
+    "errorsEndpoint": "https://1c-host/hs/um_ingest/load_errors",
     "gzip": true,
     "batchSize": 2000,
     "timeoutSeconds": 60,
     "maxRetries": 8,
     "backoffMs": 500,
-    "backoffMaxMs": 10000
+    "backoffMaxMs": 10000,
+    "auth": {
+      "type": "basic",
+      "user": "1c_user",
+      "pass": "1c_password"
+    }
   },
   "errorsJsonl": "/var/log/um_ingest_errors.jsonl",
   "progressEvery": 50000
@@ -195,12 +201,18 @@ curl -X POST http://localhost:8080/jobs \
     },
     "delivery": {
       "endpoint": "http://localhost:8081/load_batch",
+      "errorsEndpoint": "http://localhost:8081/load_errors",
       "gzip": false,
       "batchSize": 1000,
       "timeoutSeconds": 30,
       "maxRetries": 3,
       "backoffMs": 500,
-      "backoffMaxMs": 5000
+      "backoffMaxMs": 5000,
+      "auth": {
+        "type": "basic",
+        "user": "user",
+        "pass": "pass"
+      }
     },
     "progressEvery": 10000
   }'
@@ -229,22 +241,66 @@ curl -X POST http://localhost:8080/jobs/550e8400-e29b-41d4-a716-446655440000/can
   "packageId": "package-123",
   "batchNo": 1,
   "register": "РегистрСведений.Данные",
-  "cols": ["НомерСтрокиФайла", "ИмяПоля", "ДатаОпер", "Amount"],
   "rows": [
-    [1, "abc", [2026, 1, 31], 123.45],
-    [2, "def", [2026, 2, 1], 10.0]
+    {
+      "НомерСтрокиФайла": 1,
+      "ИмяПоля": "abc",
+      "ДатаОпер": "2026-01-31",
+      "Amount": 123.45
+    },
+    {
+      "НомерСтрокиФайла": 2,
+      "ИмяПоля": "def",
+      "ДатаОпер": "2026-02-01",
+      "Amount": 10.0
+    }
   ]
 }
 ```
 
-Даты отправляются как массивы `[Y, M, D]` для быстрой обработки в 1С.
+**Особенности формата:**
+- `rows` — массив объектов, где ключи — это имена полей из `schema.fields` (и `rowNoField` если `includeRowNo=true`)
+- Даты отправляются в формате ISO (YYYY-MM-DD)
+- Типы: `string`, `int`, `number` — как есть, `date` — строка ISO
+
+## Формат батча ошибок
+
+Если задан `delivery.errorsEndpoint`, ошибки отправляются в следующем формате:
+
+```json
+{
+  "packageId": "package-123",
+  "errors": [
+    {
+      "rowNo": 123,
+      "class": "Техническая",
+      "severity": "Ошибка",
+      "code": "НеПреобразуетсяВДату",
+      "field": "Date",
+      "value": "31-31-2026",
+      "message": "ожидаемый формат DD.MM.YYYY",
+      "ts": "2026-01-26T22:10:00Z"
+    }
+  ]
+}
+```
+
+**Коды ошибок:**
+- `ОшибкаРазбораCSV` — общая ошибка парсинга
+- `НеверноеЧислоКолонок` — неверное количество колонок
+- `НеПреобразуетсяВДату` — ошибка парсинга даты
+- `НеПреобразуетсяВЧисло` — ошибка парсинга числа
+- `СлишкомДлинноеЗначение` — превышение maxLen
+- `НедопустимоеЗначение` — прочие ошибки валидации
 
 ## Обработка ошибок
 
 - Ошибки парсинга строк логируются в JSONL файл (если указан `errorsJsonl`)
+- Если задан `delivery.errorsEndpoint`, ошибки отправляются батчами в 1С
 - Строки с ошибками пропускаются, job продолжает работу
 - HTTP ошибки 429/503 и 5xx ретраятся с exponential backoff
 - HTTP ошибки 4xx (кроме 429) считаются фатальными и останавливают job
+- Счетчики `errorsTotal` и `errorsSent` отображаются в статусе job
 
 ## Тестирование
 

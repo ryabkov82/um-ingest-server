@@ -32,13 +32,13 @@ func NewTransformer(j *job.Job, parser *Parser) (*Transformer, error) {
 	}, nil
 }
 
-// TransformRow transforms a CSV row to typed values according to schema
-func (t *Transformer) TransformRow(parser *Parser, row []string) ([]interface{}, error) {
-	result := make([]interface{}, 0, len(t.job.Schema.Fields)+1)
+// TransformRow transforms a CSV row to a map[string]interface{} according to schema
+func (t *Transformer) TransformRow(parser *Parser, row []string) (map[string]interface{}, error) {
+	result := make(map[string]interface{}, len(t.job.Schema.Fields)+1)
 
 	// Add row number if needed
 	if t.job.Schema.IncludeRowNo {
-		result = append(result, int(parser.GetRowNo()))
+		result[t.job.Schema.RowNoField] = int(parser.GetRowNo())
 	}
 
 	// Transform each field using precomputed indexes
@@ -55,7 +55,7 @@ func (t *Transformer) TransformRow(parser *Parser, row []string) ([]interface{},
 			return nil, fmt.Errorf("field %s: %w", field.Out, err)
 		}
 
-		result = append(result, transformed)
+		result[field.Out] = transformed
 	}
 
 	return result, nil
@@ -107,8 +107,8 @@ func (t *Transformer) transformValue(field job.FieldSpec, value string) (interfa
 		if err != nil {
 			return nil, fmt.Errorf("invalid date: %w", err)
 		}
-		// Return as [Y, M, D] array for 1C
-		return []int{date.Year(), int(date.Month()), date.Day()}, nil
+		// Return as ISO date string (YYYY-MM-DD)
+		return date.Format("2006-01-02"), nil
 
 	default:
 		return nil, fmt.Errorf("unknown type: %s", field.Type)

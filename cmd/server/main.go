@@ -112,7 +112,7 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 		return
 	}
 
-	// Create sender
+	// Create sender for data batches
 	sender := client.NewSender(
 		j.Delivery.Endpoint,
 		j.Delivery.Gzip,
@@ -120,7 +120,22 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 		j.Delivery.MaxRetries,
 		j.Delivery.BackoffMs,
 		j.Delivery.BackoffMaxMs,
+		j.Delivery.Auth,
 	)
+
+	// Create error sender if errorsEndpoint is configured
+	var errorSender *client.Sender
+	if j.Delivery.ErrorsEndpoint != "" {
+		errorSender = client.NewSender(
+			j.Delivery.ErrorsEndpoint,
+			j.Delivery.Gzip,
+			j.Delivery.TimeoutSeconds,
+			j.Delivery.MaxRetries,
+			j.Delivery.BackoffMs,
+			j.Delivery.BackoffMaxMs,
+			j.Delivery.Auth,
+		)
+	}
 
 	// Start processing (parser goroutine)
 	processErrChan := make(chan error, 1)
@@ -130,8 +145,11 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 
 	// Send batches and track progress
 	batchChan := processor.GetBatchChan()
+	errorChan := processor.GetErrorChan()
 	var sendErr error
-	var rowsSent, batchesSent int64
+	var rowsSent, batchesSent, errorsSent int64
+	batchChanClosed := false
+	errorChanClosed := false
 
 	for {
 		select {
@@ -141,8 +159,11 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 			return
 		case batch, ok := <-batchChan:
 			if !ok {
-				// Channel closed, processing done
-				goto done
+				batchChanClosed = true
+				if errorChanClosed || errorSender == nil {
+					goto done
+				}
+				continue
 			}
 
 			// Send batch
@@ -168,6 +189,27 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 				log.Printf("Job %s: Batch %d sent successfully (%d rows)", j.ID, batch.BatchNo, len(batch.Rows))
 			}
 
+		case errorBatch, ok := <-errorChan:
+			if !ok {
+				errorChanClosed = true
+				if batchChanClosed {
+					goto done
+				}
+				continue
+			}
+
+			// Send error batch
+			if errorSender != nil {
+				if err := errorSender.SendErrorBatch(jobCtx, errorBatch); err != nil {
+					log.Printf("Job %s: Error batch send error: %v", j.ID, err)
+					// Don't fail job on error batch send failure
+				} else {
+					errorsSent += int64(len(errorBatch.Errors))
+					store.UpdateErrors(j.ID, processor.GetErrorsTotal(), errorsSent)
+					log.Printf("Job %s: Error batch sent successfully (%d errors)", j.ID, len(errorBatch.Errors))
+				}
+			}
+
 		case err := <-processErrChan:
 			if err != nil && err != context.Canceled {
 				log.Printf("Job %s: Processing error: %v", j.ID, err)
@@ -175,22 +217,46 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 				store.UpdateStatus(j.ID, job.StatusFailed)
 				return
 			}
+			// Processing done, continue to process remaining batches and errors
+		}
+
+		// Check if both channels are closed
+		if batchChanClosed && (errorChanClosed || errorSender == nil) {
 			goto done
 		}
 	}
 
 done:
 	// Wait for any remaining batches
-	for batch := range batchChan {
-		if err := sender.SendBatch(jobCtx, batch); err != nil {
-			log.Printf("Job %s: Final batch %d send error: %v", j.ID, batch.BatchNo, err)
-			sendErr = err
-		} else {
-			// Successfully sent
-			rowsSent += int64(len(batch.Rows))
-			batchesSent++
-			store.UpdateSendProgress(j.ID, rowsSent, batchesSent)
+	if !batchChanClosed {
+		for batch := range batchChan {
+			if err := sender.SendBatch(jobCtx, batch); err != nil {
+				log.Printf("Job %s: Final batch %d send error: %v", j.ID, batch.BatchNo, err)
+				sendErr = err
+			} else {
+				// Successfully sent
+				rowsSent += int64(len(batch.Rows))
+				batchesSent++
+				store.UpdateSendProgress(j.ID, rowsSent, batchesSent)
+			}
 		}
+	}
+
+	// Wait for any remaining error batches
+	if errorSender != nil && !errorChanClosed {
+		for errorBatch := range errorChan {
+			if err := errorSender.SendErrorBatch(jobCtx, errorBatch); err != nil {
+				log.Printf("Job %s: Final error batch send error: %v", j.ID, err)
+			} else {
+				errorsSent += int64(len(errorBatch.Errors))
+				store.UpdateErrors(j.ID, processor.GetErrorsTotal(), errorsSent)
+			}
+		}
+	}
+
+	// Final error count update
+	if errorSender != nil {
+		store.UpdateErrors(j.ID, processor.GetErrorsTotal(), errorsSent)
 	}
 
 	// Check final status

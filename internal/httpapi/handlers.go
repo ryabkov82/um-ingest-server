@@ -162,6 +162,8 @@ func (h *Handler) GetJobStatus(w http.ResponseWriter, r *http.Request) {
 		"rowsSkipped":    j.RowsSkipped,
 		"batchesSent":    j.BatchesSent,
 		"currentBatchNo": j.CurrentBatchNo,
+		"errorsTotal":    j.ErrorsTotal,
+		"errorsSent":     j.ErrorsSent,
 		"inputPath":      j.InputPath,
 	}
 

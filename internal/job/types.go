@@ -35,6 +35,8 @@ type Job struct {
 	LastError      string
 	CurrentBatchNo int64
 	FileType       string
+	ErrorsTotal    int64
+	ErrorsSent     int64
 }
 
 // CSVConfig represents CSV parsing configuration
@@ -73,11 +75,20 @@ type SourceSpec struct {
 
 // DeliveryConfig represents delivery settings
 type DeliveryConfig struct {
-	Endpoint       string `json:"endpoint"`
-	Gzip           bool   `json:"gzip"`
-	BatchSize      int    `json:"batchSize"`
-	TimeoutSeconds int    `json:"timeoutSeconds"`
-	MaxRetries     int    `json:"maxRetries"`
-	BackoffMs      int    `json:"backoffMs"`
-	BackoffMaxMs   int    `json:"backoffMaxMs"`
+	Endpoint       string      `json:"endpoint"`
+	ErrorsEndpoint string      `json:"errorsEndpoint,omitempty"`
+	Gzip           bool        `json:"gzip"`
+	BatchSize      int         `json:"batchSize"`
+	TimeoutSeconds int         `json:"timeoutSeconds"`
+	MaxRetries     int         `json:"maxRetries"`
+	BackoffMs      int         `json:"backoffMs"`
+	BackoffMaxMs   int         `json:"backoffMaxMs"`
+	Auth           *AuthConfig `json:"auth,omitempty"`
+}
+
+// AuthConfig represents authentication configuration
+type AuthConfig struct {
+	Type string `json:"type"` // "basic"
+	User string `json:"user"`
+	Pass string `json:"pass"`
 }

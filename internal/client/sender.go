@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ryabkov82/um-ingest-server/internal/ingest"
+	"github.com/ryabkov82/um-ingest-server/internal/job"
 )
 
 // Sender sends batches to 1C endpoint with retry and backoff
@@ -22,10 +24,17 @@ type Sender struct {
 	maxRetries   int
 	backoffMs    int
 	backoffMaxMs int
+	authHeader   string // "Basic base64(user:pass)" or empty
 }
 
 // NewSender creates a new sender
-func NewSender(endpoint string, gzip bool, timeoutSeconds, maxRetries, backoffMs, backoffMaxMs int) *Sender {
+func NewSender(endpoint string, gzip bool, timeoutSeconds, maxRetries, backoffMs, backoffMaxMs int, auth *job.AuthConfig) *Sender {
+	authHeader := ""
+	if auth != nil && auth.Type == "basic" && auth.User != "" {
+		credentials := auth.User + ":" + auth.Pass
+		authHeader = "Basic " + base64.StdEncoding.EncodeToString([]byte(credentials))
+	}
+
 	return &Sender{
 		client: &http.Client{
 			Timeout: time.Duration(timeoutSeconds) * time.Second,
@@ -35,6 +44,7 @@ func NewSender(endpoint string, gzip bool, timeoutSeconds, maxRetries, backoffMs
 		maxRetries:   maxRetries,
 		backoffMs:    backoffMs,
 		backoffMaxMs: backoffMaxMs,
+		authHeader:   authHeader,
 	}
 }
 
@@ -114,6 +124,9 @@ func (s *Sender) sendBatchOnce(ctx context.Context, batch *ingest.Batch) error {
 	if contentEncoding != "" {
 		req.Header.Set("Content-Encoding", contentEncoding)
 	}
+	if s.authHeader != "" {
+		req.Header.Set("Authorization", s.authHeader)
+	}
 
 	// Send request
 	resp, err := s.client.Do(req)
@@ -188,4 +201,105 @@ func GetHTTPError(err error) (*HTTPError, bool) {
 
 func (e *HTTPError) Error() string {
 	return fmt.Sprintf("HTTP %d: %s", e.StatusCode, e.Body)
+}
+
+// SendErrorBatch sends an error batch with retry logic
+func (s *Sender) SendErrorBatch(ctx context.Context, errorBatch *ingest.ErrorBatch) error {
+	var lastErr error
+
+	for attempt := 0; attempt <= s.maxRetries; attempt++ {
+		if attempt > 0 {
+			// Calculate backoff
+			backoff := time.Duration(s.backoffMs) * time.Duration(1<<uint(attempt-1)) * time.Millisecond
+			if backoff > time.Duration(s.backoffMaxMs)*time.Millisecond {
+				backoff = time.Duration(s.backoffMaxMs) * time.Millisecond
+			}
+
+			// Check if last error has Retry-After header
+			if lastErr != nil {
+				if httpErr, ok := lastErr.(*HTTPError); ok && httpErr.RetryAfter > 0 {
+					backoff = httpErr.RetryAfter
+				}
+			}
+
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(backoff):
+			}
+		}
+
+		err := s.sendErrorBatchOnce(ctx, errorBatch)
+		if err == nil {
+			return nil
+		}
+
+		lastErr = err
+
+		// Check if error is retryable
+		if !s.isRetryable(err) {
+			return err
+		}
+	}
+
+	return fmt.Errorf("max retries exceeded: %w", lastErr)
+}
+
+// sendErrorBatchOnce sends an error batch once
+func (s *Sender) sendErrorBatchOnce(ctx context.Context, errorBatch *ingest.ErrorBatch) error {
+	// Marshal JSON
+	jsonData, err := json.Marshal(errorBatch)
+	if err != nil {
+		return fmt.Errorf("marshal error: %w", err)
+	}
+
+	// Compress if needed
+	var body io.Reader = bytes.NewReader(jsonData)
+	contentEncoding := ""
+	if s.gzip {
+		var buf bytes.Buffer
+		gz := gzip.NewWriter(&buf)
+		if _, err := gz.Write(jsonData); err != nil {
+			return fmt.Errorf("gzip error: %w", err)
+		}
+		if err := gz.Close(); err != nil {
+			return fmt.Errorf("gzip close error: %w", err)
+		}
+		body = &buf
+		contentEncoding = "gzip"
+	}
+
+	// Create request
+	req, err := http.NewRequestWithContext(ctx, "POST", s.endpoint, body)
+	if err != nil {
+		return fmt.Errorf("create request error: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	if contentEncoding != "" {
+		req.Header.Set("Content-Encoding", contentEncoding)
+	}
+	if s.authHeader != "" {
+		req.Header.Set("Authorization", s.authHeader)
+	}
+
+	// Send request
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("http error: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Check response
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return nil
+	}
+
+	// Read error body for logging
+	bodyBytes, _ := io.ReadAll(resp.Body)
+	return &HTTPError{
+		StatusCode: resp.StatusCode,
+		Body:       string(bodyBytes),
+		RetryAfter: s.parseRetryAfter(resp.Header.Get("Retry-After")),
+	}
 }

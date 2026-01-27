@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ryabkov82/um-ingest-server/internal/ingest"
+	"github.com/ryabkov82/um-ingest-server/internal/job"
 )
 
 func TestRetryAndBackoff(t *testing.T) {
@@ -26,14 +28,13 @@ func TestRetryAndBackoff(t *testing.T) {
 	}))
 	defer server.Close()
 
-	sender := NewSender(server.URL, false, 5, 3, 100, 1000)
+	sender := NewSender(server.URL, false, 5, 3, 100, 1000, nil)
 
 	batch := &ingest.Batch{
 		PackageID: "test",
 		BatchNo:   1,
 		Register:  "test",
-		Cols:      []string{"col1"},
-		Rows:      [][]interface{}{{1}},
+		Rows:      []map[string]interface{}{{"col1": 1}},
 	}
 
 	ctx := context.Background()
@@ -69,14 +70,13 @@ func TestRetryAfterHeader(t *testing.T) {
 	}))
 	defer server.Close()
 
-	sender := NewSender(server.URL, false, 5, 3, 10, 1000)
+	sender := NewSender(server.URL, false, 5, 3, 10, 1000, nil)
 
 	batch := &ingest.Batch{
 		PackageID: "test",
 		BatchNo:   1,
 		Register:  "test",
-		Cols:      []string{"col1"},
-		Rows:      [][]interface{}{{1}},
+		Rows:      []map[string]interface{}{{"col1": 1}},
 	}
 
 	ctx := context.Background()
@@ -101,14 +101,13 @@ func TestFatalError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	sender := NewSender(server.URL, false, 5, 3, 100, 1000)
+	sender := NewSender(server.URL, false, 5, 3, 100, 1000, nil)
 
 	batch := &ingest.Batch{
 		PackageID: "test",
 		BatchNo:   1,
 		Register:  "test",
-		Cols:      []string{"col1"},
-		Rows:      [][]interface{}{{1}},
+		Rows:      []map[string]interface{}{{"col1": 1}},
 	}
 
 	ctx := context.Background()
@@ -147,14 +146,13 @@ func TestGzip(t *testing.T) {
 	}))
 	defer server.Close()
 
-	sender := NewSender(server.URL, true, 5, 0, 100, 1000)
+	sender := NewSender(server.URL, true, 5, 0, 100, 1000, nil)
 
 	batch := &ingest.Batch{
 		PackageID: "test",
 		BatchNo:   1,
 		Register:  "test",
-		Cols:      []string{"col1"},
-		Rows:      [][]interface{}{{1}},
+		Rows:      []map[string]interface{}{{"col1": 1}},
 	}
 
 	ctx := context.Background()
@@ -166,6 +164,49 @@ func TestGzip(t *testing.T) {
 
 	if !receivedGzip {
 		t.Error("Expected gzip encoding, but it was not received")
+	}
+}
+
+func TestBasicAuth(t *testing.T) {
+	var receivedAuth bool
+	var authHeader string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authHeader = r.Header.Get("Authorization")
+		if authHeader != "" && strings.HasPrefix(authHeader, "Basic ") {
+			receivedAuth = true
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	auth := &job.AuthConfig{
+		Type: "basic",
+		User: "testuser",
+		Pass: "testpass",
+	}
+	sender := NewSender(server.URL, false, 5, 0, 100, 1000, auth)
+
+	batch := &ingest.Batch{
+		PackageID: "test",
+		BatchNo:   1,
+		Register:  "test",
+		Rows:      []map[string]interface{}{{"col1": 1}},
+	}
+
+	ctx := context.Background()
+	err := sender.SendBatch(ctx, batch)
+
+	if err != nil {
+		t.Errorf("SendBatch() error = %v", err)
+	}
+
+	if !receivedAuth {
+		t.Error("Expected Authorization header, but it was not received")
+	}
+
+	if !strings.HasPrefix(authHeader, "Basic ") {
+		t.Errorf("Expected Basic auth, got: %s", authHeader)
 	}
 }
 
