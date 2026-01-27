@@ -51,6 +51,7 @@ func TestErrorBatchFormat(t *testing.T) {
 func TestErrorCounting(t *testing.T) {
 	// Create a job with errorsEndpoint
 	j := &job.Job{
+		PackageID: "test-errors",
 		CSV: job.CSVConfig{
 			HasHeader: false,
 			MapBy:     "order",

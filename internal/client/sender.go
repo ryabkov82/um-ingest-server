@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -27,12 +28,37 @@ type Sender struct {
 	authHeader   string // "Basic base64(user:pass)" or empty
 }
 
+// ResolveDeliveryAuth resolves authentication credentials for 1C delivery
+// Priority: job.Delivery.Auth > env credentials
+// Returns (user, pass, fromPayload) where fromPayload indicates if credentials came from job payload
+func ResolveDeliveryAuth(jobAuth *job.AuthConfig, envUser, envPass string) (string, string, bool) {
+	// Priority 1: job payload auth (deprecated but supported)
+	if jobAuth != nil && jobAuth.Type == "basic" && jobAuth.User != "" {
+		return jobAuth.User, jobAuth.Pass, true
+	}
+
+	// Priority 2: environment credentials
+	if envUser != "" && envPass != "" {
+		return envUser, envPass, false
+	}
+
+	// No valid credentials
+	return "", "", false
+}
+
 // NewSender creates a new sender
-func NewSender(endpoint string, gzip bool, timeoutSeconds, maxRetries, backoffMs, backoffMaxMs int, auth *job.AuthConfig) *Sender {
+func NewSender(endpoint string, gzip bool, timeoutSeconds, maxRetries, backoffMs, backoffMaxMs int, auth *job.AuthConfig, envUser, envPass string) *Sender {
+	user, pass, fromPayload := ResolveDeliveryAuth(auth, envUser, envPass)
+
 	authHeader := ""
-	if auth != nil && auth.Type == "basic" && auth.User != "" {
-		credentials := auth.User + ":" + auth.Pass
+	if user != "" && pass != "" {
+		credentials := user + ":" + pass
 		authHeader = "Basic " + base64.StdEncoding.EncodeToString([]byte(credentials))
+
+		// Log deprecation warning if using payload auth
+		if fromPayload {
+			log.Printf("WARNING: delivery.auth is deprecated, use UM_1C_BASIC_USER/PASS environment variables instead")
+		}
 	}
 
 	return &Sender{
@@ -127,6 +153,11 @@ func (s *Sender) sendBatchOnce(ctx context.Context, batch *ingest.Batch) error {
 	if s.authHeader != "" {
 		req.Header.Set("Authorization", s.authHeader)
 	}
+
+	// Add batch headers for 1C
+	req.Header.Set("X-UM-PackageId", batch.PackageID)
+	req.Header.Set("X-UM-BatchNo", fmt.Sprintf("%d", batch.BatchNo))
+	req.Header.Set("X-UM-RowsCount", fmt.Sprintf("%d", len(batch.Rows)))
 
 	// Send request
 	resp, err := s.client.Do(req)

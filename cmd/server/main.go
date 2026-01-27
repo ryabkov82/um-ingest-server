@@ -28,6 +28,10 @@ func main() {
 		port = "8080"
 	}
 
+	// Get 1C Basic auth credentials from environment
+	env1CUser := os.Getenv("UM_1C_BASIC_USER")
+	env1CPass := os.Getenv("UM_1C_BASIC_PASS")
+
 	// Create job store
 	store := job.NewStore()
 
@@ -35,10 +39,10 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go worker(ctx, store, allowedBaseDir)
+	go worker(ctx, store, allowedBaseDir, env1CUser, env1CPass)
 
 	// Setup HTTP server
-	handler := httpapi.NewHandler(store, allowedBaseDir)
+	handler := httpapi.NewHandler(store, allowedBaseDir, env1CUser, env1CPass)
 	router := httpapi.SetupRouter(handler)
 
 	server := &http.Server{
@@ -73,7 +77,7 @@ func main() {
 }
 
 // worker processes jobs from the queue (synchronously, one at a time)
-func worker(ctx context.Context, store *job.Store, allowedBaseDir string) {
+func worker(ctx context.Context, store *job.Store, allowedBaseDir, env1CUser, env1CPass string) {
 	for {
 		// Get next job (blocking)
 		j, err := store.NextJob(ctx)
@@ -87,12 +91,12 @@ func worker(ctx context.Context, store *job.Store, allowedBaseDir string) {
 		}
 
 		// Process job synchronously (no goroutine)
-		processJob(ctx, j, store, allowedBaseDir)
+		processJob(ctx, j, store, allowedBaseDir, env1CUser, env1CPass)
 	}
 }
 
 // processJob processes a single job
-func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDir string) {
+func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDir, env1CUser, env1CPass string) {
 	// Create cancel context for this job from parent context
 	jobCtx, jobCancel := context.WithCancel(ctx)
 	defer jobCancel()
@@ -121,6 +125,8 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 		j.Delivery.BackoffMs,
 		j.Delivery.BackoffMaxMs,
 		j.Delivery.Auth,
+		env1CUser,
+		env1CPass,
 	)
 
 	// Create error sender if errorsEndpoint is configured
@@ -134,6 +140,8 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 			j.Delivery.BackoffMs,
 			j.Delivery.BackoffMaxMs,
 			j.Delivery.Auth,
+			env1CUser,
+			env1CPass,
 		)
 	}
 

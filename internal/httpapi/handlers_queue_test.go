@@ -3,6 +3,7 @@ package httpapi
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -17,7 +18,7 @@ func TestCreateJobQueueFull(t *testing.T) {
 	allowedBase := tmpDir + "/incoming"
 	
 	store := job.NewStore()
-	handler := NewHandler(store, allowedBase)
+	handler := NewHandler(store, allowedBase, "test_user", "test_pass")
 
 	// Create test file
 	testFile := allowedBase + "/test.csv"
@@ -25,9 +26,10 @@ func TestCreateJobQueueFull(t *testing.T) {
 	os.WriteFile(testFile, []byte("test"), 0644)
 
 	// Fill the queue
+	// Use unique packageId for each job to avoid ErrJobAlreadyRunning
 	for i := 0; i < 1000; i++ {
 		j := &job.Job{
-			PackageID: "test",
+			PackageID: fmt.Sprintf("test-%d", i),
 			InputPath:  testFile,
 		}
 		_, _ = store.Create(j)
@@ -35,7 +37,7 @@ func TestCreateJobQueueFull(t *testing.T) {
 
 	// Create request
 	reqBody := map[string]interface{}{
-		"packageId": "test",
+		"packageId": "test-1000",
 		"inputPath": testFile,
 		"csv": map[string]interface{}{
 			"encoding":  "utf-8",

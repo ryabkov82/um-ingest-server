@@ -13,26 +13,48 @@ import (
 // ErrQueueFull is returned when the job queue is full
 var ErrQueueFull = errors.New("queue is full")
 
+// ErrJobAlreadyRunning is returned when a job with the same packageId is already active
+var ErrJobAlreadyRunning = errors.New("job already running for this packageId")
+
 // Store manages jobs in memory
 type Store struct {
-	mu      sync.RWMutex
-	jobs    map[string]*Job
-	queue   chan *Job
-	cancels map[string]context.CancelFunc
+	mu                sync.RWMutex
+	jobs              map[string]*Job              // jobId -> Job
+	activeJobByPackage map[string]string           // packageId -> jobId (only for queued/running)
+	queue             chan *Job
+	cancels           map[string]context.CancelFunc
 }
 
 // NewStore creates a new job store
 func NewStore() *Store {
 	return &Store{
-		jobs:    make(map[string]*Job),
-		queue:   make(chan *Job, 1000),
-		cancels: make(map[string]context.CancelFunc),
+		jobs:              make(map[string]*Job),
+		activeJobByPackage: make(map[string]string),
+		queue:             make(chan *Job, 1000),
+		cancels:           make(map[string]context.CancelFunc),
 	}
 }
 
 // Create creates a new job and returns its ID
 // Returns ErrQueueFull if the queue is full (job is not created)
+// Returns ErrJobAlreadyRunning if there's already an active job for this packageId
 func (s *Store) Create(j *Job) (string, error) {
+	if j.PackageID == "" {
+		return "", errors.New("packageId is required")
+	}
+
+	s.mu.Lock()
+	// Check if there's already an active job for this packageId
+	if existingJobID, exists := s.activeJobByPackage[j.PackageID]; exists {
+		existingJob, ok := s.jobs[existingJobID]
+		if ok && (existingJob.Status == StatusQueued || existingJob.Status == StatusRunning) {
+			s.mu.Unlock()
+			return "", ErrJobAlreadyRunning
+		}
+		// Clean up stale entry
+		delete(s.activeJobByPackage, j.PackageID)
+	}
+
 	j.ID = uuid.New().String()
 	j.Status = StatusQueued
 
@@ -40,12 +62,13 @@ func (s *Store) Create(j *Job) (string, error) {
 	select {
 	case s.queue <- j:
 		// Successfully queued, now create the job
-		s.mu.Lock()
 		s.jobs[j.ID] = j
+		s.activeJobByPackage[j.PackageID] = j.ID
 		s.mu.Unlock()
 		return j.ID, nil
 	default:
 		// Queue full, don't create job
+		s.mu.Unlock()
 		return "", ErrQueueFull
 	}
 }
@@ -72,6 +95,7 @@ func (s *Store) UpdateStatus(id string, status JobStatus) error {
 		return fmt.Errorf("job not found: %s", id)
 	}
 
+	oldStatus := j.Status
 	j.Status = status
 	now := time.Now()
 
@@ -83,6 +107,12 @@ func (s *Store) UpdateStatus(id string, status JobStatus) error {
 	case StatusSucceeded, StatusFailed, StatusCanceled:
 		if j.FinishedAt == nil {
 			j.FinishedAt = &now
+		}
+		// Remove from activeJobByPackage when job finishes
+		if oldStatus == StatusQueued || oldStatus == StatusRunning {
+			if s.activeJobByPackage[j.PackageID] == id {
+				delete(s.activeJobByPackage, j.PackageID)
+			}
 		}
 	}
 
@@ -214,6 +244,12 @@ func (s *Store) Cancel(id string) error {
 	j.Status = StatusCanceled
 	now := time.Now()
 	j.FinishedAt = &now
+	
+	// Remove from activeJobByPackage
+	if s.activeJobByPackage[j.PackageID] == id {
+		delete(s.activeJobByPackage, j.PackageID)
+	}
+	
 	s.mu.Unlock()
 
 	// Call cancel function outside of lock
@@ -232,5 +268,26 @@ func (s *Store) NextJob(ctx context.Context) (*Job, error) {
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+}
+
+// GetActiveJobByPackage returns the active job ID for a given packageId
+// Returns empty string if no active job exists
+func (s *Store) GetActiveJobByPackage(packageID string) (string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	jobID, exists := s.activeJobByPackage[packageID]
+	if !exists {
+		return "", nil
+	}
+
+	// Verify the job still exists and is active
+	job, ok := s.jobs[jobID]
+	if !ok || (job.Status != StatusQueued && job.Status != StatusRunning) {
+		// Stale entry, will be cleaned up on next status update
+		return "", nil
+	}
+
+	return jobID, nil
 }
 

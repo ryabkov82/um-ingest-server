@@ -37,6 +37,27 @@ func SetupRouter(handler *Handler) http.Handler {
 		}
 	})
 
+	// GET /packages/{packageId}/job
+	// POST /packages/{packageId}/cancel
+	mux.HandleFunc("/packages/", func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		if strings.HasSuffix(path, "/job") {
+			if r.Method == http.MethodGet {
+				handler.GetJobByPackage(w, r)
+			} else {
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			}
+		} else if strings.HasSuffix(path, "/cancel") {
+			if r.Method == http.MethodPost {
+				handler.CancelJobByPackage(w, r)
+			} else {
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			}
+		} else {
+			http.Error(w, "Not found", http.StatusNotFound)
+		}
+	})
+
 	return AuthMiddleware(mux)
 }
 

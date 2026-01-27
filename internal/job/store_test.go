@@ -2,6 +2,7 @@ package job
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -64,10 +65,11 @@ func TestStoreCancelNoDataRace(t *testing.T) {
 	store := NewStore()
 
 	// Create multiple jobs
+	// Use unique packageId for each job to avoid ErrJobAlreadyRunning
 	jobIDs := make([]string, 10)
 	for i := 0; i < 10; i++ {
 		j := &Job{
-			PackageID: "test",
+			PackageID: fmt.Sprintf("test-cancel-%d", i),
 			InputPath: "/tmp/test.csv",
 			Status:    StatusQueued,
 		}

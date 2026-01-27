@@ -17,10 +17,12 @@ import (
 type Handler struct {
 	store          *job.Store
 	allowedBaseDir string
+	env1CUser      string
+	env1CPass      string
 }
 
 // NewHandler creates a new handler
-func NewHandler(store *job.Store, allowedBaseDir string) *Handler {
+func NewHandler(store *job.Store, allowedBaseDir, env1CUser, env1CPass string) *Handler {
 	// Ensure allowedBaseDir is absolute
 	absDir, err := filepath.Abs(allowedBaseDir)
 	if err != nil {
@@ -30,6 +32,8 @@ func NewHandler(store *job.Store, allowedBaseDir string) *Handler {
 	return &Handler{
 		store:          store,
 		allowedBaseDir: absDir,
+		env1CUser:      env1CUser,
+		env1CPass:      env1CPass,
 	}
 }
 
@@ -56,6 +60,10 @@ func (h *Handler) CreateJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate required fields
+	if req.PackageID == "" {
+		http.Error(w, "packageId is required", http.StatusBadRequest)
+		return
+	}
 	if req.InputPath == "" {
 		http.Error(w, "inputPath is required", http.StatusBadRequest)
 		return
@@ -70,6 +78,25 @@ func (h *Handler) CreateJob(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.ProgressEvery <= 0 {
 		req.ProgressEvery = 50000 // default
+	}
+
+	// Validate delivery auth
+	if req.Delivery.Auth != nil {
+		// If delivery.auth is provided, validate it
+		if req.Delivery.Auth.Type != "basic" {
+			http.Error(w, "delivery.auth.type must be 'basic'", http.StatusBadRequest)
+			return
+		}
+		if req.Delivery.Auth.User == "" || req.Delivery.Auth.Pass == "" {
+			http.Error(w, "delivery.auth.user and delivery.auth.pass are required when delivery.auth is specified", http.StatusBadRequest)
+			return
+		}
+	} else {
+		// If delivery.auth is not provided, check if env credentials are available
+		if h.env1CUser == "" || h.env1CPass == "" {
+			http.Error(w, "delivery.auth is required unless UM_1C_BASIC_USER/PASS are set", http.StatusBadRequest)
+			return
+		}
 	}
 
 	// Validate CSV parameters
@@ -120,6 +147,27 @@ func (h *Handler) CreateJob(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if err == job.ErrQueueFull {
 			http.Error(w, "Queue is full, please try again later", http.StatusTooManyRequests)
+			return
+		}
+		if err == job.ErrJobAlreadyRunning {
+			// Get the existing active job
+			existingJobID, _ := h.store.GetActiveJobByPackage(req.PackageID)
+			var existingJob *job.Job
+			if existingJobID != "" {
+				existingJob, _ = h.store.Get(existingJobID)
+			}
+			
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			response := map[string]interface{}{
+				"error":     "job_already_running",
+				"packageId": req.PackageID,
+			}
+			if existingJob != nil {
+				response["jobId"] = existingJob.ID
+				response["status"] = string(existingJob.Status)
+			}
+			json.NewEncoder(w).Encode(response)
 			return
 		}
 		http.Error(w, fmt.Sprintf("Failed to create job: %v", err), http.StatusInternalServerError)
@@ -180,8 +228,151 @@ func (h *Handler) GetJobStatus(w http.ResponseWriter, r *http.Request) {
 		response["fileType"] = j.FileType
 	}
 
+	// Include delivery config but sanitize auth (never return password)
+	if j.Delivery.Auth != nil {
+		response["delivery"] = map[string]interface{}{
+			"endpoint":       j.Delivery.Endpoint,
+			"errorsEndpoint": j.Delivery.ErrorsEndpoint,
+			"gzip":           j.Delivery.Gzip,
+			"batchSize":      j.Delivery.BatchSize,
+			"timeoutSeconds": j.Delivery.TimeoutSeconds,
+			"maxRetries":     j.Delivery.MaxRetries,
+			"backoffMs":      j.Delivery.BackoffMs,
+			"backoffMaxMs":   j.Delivery.BackoffMaxMs,
+			"auth": map[string]interface{}{
+				"type": j.Delivery.Auth.Type,
+				"user": j.Delivery.Auth.User,
+				// pass is intentionally omitted for security
+			},
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
+}
+
+// GetJobByPackage handles GET /packages/{packageId}/job
+func (h *Handler) GetJobByPackage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract packageId from path like /packages/{packageId}/job
+	path := strings.TrimPrefix(r.URL.Path, "/packages/")
+	path = strings.TrimSuffix(path, "/job")
+	packageID := path
+	if packageID == "" {
+		http.Error(w, "packageId is required", http.StatusBadRequest)
+		return
+	}
+
+	jobID, err := h.store.GetActiveJobByPackage(packageID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Internal error: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	if jobID == "" {
+		http.Error(w, "No active job found for this packageId", http.StatusNotFound)
+		return
+	}
+
+	j, err := h.store.Get(jobID)
+	if err != nil {
+		http.Error(w, "Job not found", http.StatusNotFound)
+		return
+	}
+
+	// Return same format as GET /jobs/{jobId} but with jobId included
+	response := map[string]interface{}{
+		"jobId":         j.ID,
+		"status":        j.Status,
+		"rowsRead":      j.RowsRead,
+		"rowsSent":      j.RowsSent,
+		"rowsSkipped":    j.RowsSkipped,
+		"batchesSent":   j.BatchesSent,
+		"currentBatchNo": j.CurrentBatchNo,
+		"errorsTotal":   j.ErrorsTotal,
+		"errorsSent":    j.ErrorsSent,
+		"inputPath":     j.InputPath,
+	}
+
+	if j.StartedAt != nil {
+		response["startedAt"] = j.StartedAt.Format(time.RFC3339)
+	}
+	if j.FinishedAt != nil {
+		response["finishedAt"] = j.FinishedAt.Format(time.RFC3339)
+	}
+	if j.LastError != "" {
+		response["lastError"] = j.LastError
+	}
+	if j.FileType != "" {
+		response["fileType"] = j.FileType
+	}
+
+	// Include delivery config but sanitize auth (never return password)
+	if j.Delivery.Auth != nil {
+		response["delivery"] = map[string]interface{}{
+			"endpoint":       j.Delivery.Endpoint,
+			"errorsEndpoint": j.Delivery.ErrorsEndpoint,
+			"gzip":           j.Delivery.Gzip,
+			"batchSize":      j.Delivery.BatchSize,
+			"timeoutSeconds": j.Delivery.TimeoutSeconds,
+			"maxRetries":     j.Delivery.MaxRetries,
+			"backoffMs":      j.Delivery.BackoffMs,
+			"backoffMaxMs":   j.Delivery.BackoffMaxMs,
+			"auth": map[string]interface{}{
+				"type": j.Delivery.Auth.Type,
+				"user": j.Delivery.Auth.User,
+				// pass is intentionally omitted for security
+			},
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// CancelJobByPackage handles POST /packages/{packageId}/cancel
+func (h *Handler) CancelJobByPackage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract packageId from path like /packages/{packageId}/cancel
+	path := strings.TrimPrefix(r.URL.Path, "/packages/")
+	path = strings.TrimSuffix(path, "/cancel")
+	packageID := path
+	if packageID == "" {
+		http.Error(w, "packageId is required", http.StatusBadRequest)
+		return
+	}
+
+	jobID, err := h.store.GetActiveJobByPackage(packageID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Internal error: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	if jobID == "" {
+		http.Error(w, "No active job found for this packageId", http.StatusNotFound)
+		return
+	}
+
+	// Cancel the job
+	err = h.store.Cancel(jobID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to cancel job: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status": "canceled",
+		"jobId":  jobID,
+	})
 }
 
 // CancelJob handles POST /jobs/{jobId}/cancel
