@@ -11,21 +11,35 @@ ExecStart=/opt/um-ingest-server/um-ingest-server
 Restart=always
 RestartSec=5
 
-Environment="ALLOWED_BASE_DIR=/data/incoming"
-Environment="PORT=8080"
-Environment="UM_INGEST_API_KEY=your-secret-key-here"
+# --- Config (env) ---
+Environment="ALLOWED_BASE_DIR=/mnt/pilot"
+Environment="PORT=8081"
+Environment="UM_INGEST_API_KEY=777"
 
-# Security
+# Basic auth for 1C endpoints (used when delivery.auth is omitted)
+Environment="UM_1C_BASIC_USER=svc_um_ingest"
+Environment="UM_1C_BASIC_PASS=change-me"
+
+# --- Logs ---
+StandardOutput=journal
+StandardError=journal
+
+# --- Security hardening ---
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/data/incoming /var/log
 
-# Resource limits
+# Allow writes only where needed
+ReadWritePaths=/var/log/um-ingest
+
+# If ALLOWED_BASE_DIR is read-only mount, no need to add.
+# If it must be writable (not required for read-only CSV), add it:
+# ReadWritePaths=/var/log/um-ingest /mnt/pilot
+
+# --- Resource limits ---
 LimitNOFILE=65536
 MemoryMax=2G
 
 [Install]
 WantedBy=multi-user.target
-

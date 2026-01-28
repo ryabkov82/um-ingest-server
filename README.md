@@ -22,13 +22,53 @@ HTTP-сервис для парсинга больших CSV файлов и о�
 
 ## Установка
 
-### Базовая сборка
+### Сборка и деплой через Makefile (рекомендуется)
+
+Для автоматизации сборки и деплоя используйте Makefile:
+
+```bash
+# Получить последние изменения
+git pull
+
+# Запустить тесты
+make test
+
+# Собрать бинарник с версионированием
+make build
+
+# Проверить версию собранного бинарника
+make version
+
+# Развернуть на VM (требует sudo)
+make deploy
+```
+
+**Важно:**
+- `make deploy` требует права `sudo` на VM для управления systemd сервисом
+- Версия бинарника берётся из git tags (`git describe --tags --always`)
+- Бинарник не хранится в репозитории (добавлен в `.gitignore`)
+
+**Доступные цели Makefile:**
+- `make help` — показать справку по всем целям
+- `make pull` — выполнить `git pull`
+- `make test` — запустить тесты
+- `make build` — собрать бинарник с версионированием
+- `make version` — показать версию собранного бинарника
+- `make deploy` — развернуть сервис (test → build → stop → install → start → status)
+- `make status` — показать статус сервиса
+- `make restart` — перезапустить сервис
+- `make clean` — удалить локальный бинарник
+- `make check` — проверить доступность сервиса через `/version`
+
+### Ручная сборка
+
+#### Базовая сборка
 
 ```bash
 go build -o um-ingest-server ./cmd/server
 ```
 
-### Сборка с версионированием
+#### Сборка с версионированием
 
 Для сборки с информацией о версии используйте `-ldflags`:
 
@@ -36,20 +76,6 @@ go build -o um-ingest-server ./cmd/server
 VERSION=$(git describe --tags --always 2>/dev/null || echo "dev")
 GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-
-go build -ldflags "\
-  -X 'github.com/ryabkov82/um-ingest-server/internal/version.Version=${VERSION}' \
-  -X 'github.com/ryabkov82/um-ingest-server/internal/version.GitCommit=${GIT_COMMIT}' \
-  -X 'github.com/ryabkov82/um-ingest-server/internal/version.BuildTime=${BUILD_TIME}'" \
-  -o um-ingest-server ./cmd/server
-```
-
-Или используйте переменные окружения:
-
-```bash
-export VERSION=$(git describe --tags --always 2>/dev/null || echo "dev")
-export GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-export BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 go build -ldflags "\
   -X 'github.com/ryabkov82/um-ingest-server/internal/version.Version=${VERSION}' \
@@ -618,4 +644,40 @@ go test ./...
 
 ## Развертывание
 
+### Автоматический деплой через Makefile
+
+Для автоматического развертывания на VM используйте:
+
+```bash
+make deploy
+```
+
+Эта команда последовательно выполняет:
+1. `make test` — запускает тесты
+2. `make build` — собирает бинарник с версионированием
+3. Останавливает systemd сервис
+4. Устанавливает бинарник в `/opt/um-ingest-server/`
+5. Запускает systemd сервис
+6. Показывает статус сервиса
+7. Проверяет доступность через `/version` (best-effort)
+
+**Требования:**
+- Права `sudo` на VM
+- Настроенный systemd unit файл (см. `deploy/um-ingest.service`)
+- Пользователь и группа `um-ingest` должны существовать
+
+**Настройка переменных:**
+```bash
+make deploy SERVICE=um-ingest.service INSTALL_DIR=/opt/um-ingest-server
+```
+
+### Ручной деплой
+
 См. `deploy/um-ingest.service` для примера systemd unit файла.
+
+После сборки бинарника:
+```bash
+sudo install -o um-ingest -g um-ingest -m 0755 ./um-ingest-server /opt/um-ingest-server/um-ingest-server
+sudo systemctl restart um-ingest.service
+sudo systemctl status um-ingest.service
+```
