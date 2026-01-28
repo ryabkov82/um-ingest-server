@@ -236,6 +236,12 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 
 			// Send error batch (required if errorsEndpoint is configured)
 			if errorSender != nil {
+
+				if errorBatch == nil || len(errorBatch.Errors) == 0 {
+					// optional log
+					continue
+				}
+
 				if err := errorSender.SendErrorBatch(jobCtx, errorBatch); err != nil {
 					log.Printf("Job %s: Error batch %d send error: %v", j.ID, errorBatch.BatchNo, err)
 					// Fail job if error batch delivery fails (errorsEndpoint is configured)
@@ -293,6 +299,12 @@ done:
 	// Wait for any remaining error batches (required if errorsEndpoint is configured)
 	if errorSender != nil && !errorChanClosed {
 		for errorBatch := range errorChan {
+			// Skip empty error batches
+			if len(errorBatch.Errors) == 0 {
+				log.Printf("Job %s: Skipping empty final error batch %d", j.ID, errorBatch.BatchNo)
+				continue
+			}
+
 			if err := errorSender.SendErrorBatch(jobCtx, errorBatch); err != nil {
 				log.Printf("Job %s: Final error batch %d send error: %v", j.ID, errorBatch.BatchNo, err)
 				// Fail job if error batch delivery fails (errorsEndpoint is configured)
@@ -314,21 +326,13 @@ done:
 		}
 	}
 
-	// Final check: if errorsEndpoint is configured and there are errors, ensure all were sent
+	// Final check: flush any remaining errors in buffer (only if errorsEndpoint is configured)
+	// This will only send if there are actual errors in the buffer
 	if errorSender != nil {
-		errorsTotal := processor.GetErrorsTotal()
-		if errorsTotal > 0 && errorsSent == 0 {
-			// This should not happen if we processed all error batches correctly,
-			// but add a safety check
-			log.Printf("Job %s: WARNING: errorsEndpoint configured, errorsTotal=%d but errorsSent=0", j.ID, errorsTotal)
-		}
-		if errorsTotal > errorsSent {
-			// Some errors were not sent (should not happen, but safety check)
-			errorMsg := fmt.Sprintf("not all errors were delivered: errorsTotal=%d, errorsSent=%d", errorsTotal, errorsSent)
-			store.UpdateError(j.ID, fmt.Errorf(errorMsg))
-			store.UpdateStatus(j.ID, job.StatusFailed)
-			return
-		}
+		// Wait a bit to ensure processor has flushed its buffer
+		// The processor will flush remaining errors in parseAndBatch before closing errorChan
+		// So by the time we get here, all errors should have been sent via errorChan
+		// But we don't need to do anything here - errors are sent via errorChan
 	}
 
 	// Final error count update

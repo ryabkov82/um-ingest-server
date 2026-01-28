@@ -321,8 +321,16 @@ func (p *Processor) createErrorItem(rowNo int64, err error, row []string) ErrorI
 }
 
 // flushErrorBatch sends buffered errors to error channel
+// Only sends if there are actual errors (len > 0)
 func (p *Processor) flushErrorBatch(ctx context.Context) {
 	if len(p.errorBuffer) == 0 {
+		return
+	}
+
+	// Only send if errorsEndpoint is configured
+	if p.job.Delivery.ErrorsEndpoint == "" {
+		// Clear buffer but don't send
+		p.errorBuffer = p.errorBuffer[:0]
 		return
 	}
 

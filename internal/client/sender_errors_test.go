@@ -200,3 +200,53 @@ func TestErrorBatch409Success(t *testing.T) {
 	}
 }
 
+func TestNoEmptyErrorBatchSent(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	// Empty error batch
+	errorBatch := &ingest.ErrorBatch{
+		PackageID: "test-pkg",
+		Errors:    []ingest.ErrorItem{}, // Empty
+	}
+
+	sender := NewSender(server.URL, false, 1, 3, 10, 100, nil, "", "")
+	ctx := context.Background()
+
+	err := sender.SendErrorBatch(ctx, errorBatch)
+	if err != nil {
+		t.Fatalf("SendErrorBatch() should return nil for empty batch, got error: %v", err)
+	}
+
+	// Should not make any HTTP calls
+	if attempts != 0 {
+		t.Errorf("Expected 0 HTTP calls for empty batch, got %d", attempts)
+	}
+}
+
+func TestNoEmptyErrorBatchSentNil(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	sender := NewSender(server.URL, false, 1, 3, 10, 100, nil, "", "")
+	ctx := context.Background()
+
+	err := sender.SendErrorBatch(ctx, nil)
+	if err != nil {
+		t.Fatalf("SendErrorBatch() should return nil for nil batch, got error: %v", err)
+	}
+
+	// Should not make any HTTP calls
+	if attempts != 0 {
+		t.Errorf("Expected 0 HTTP calls for nil batch, got %d", attempts)
+	}
+}
+

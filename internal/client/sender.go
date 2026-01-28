@@ -235,7 +235,13 @@ func (e *HTTPError) Error() string {
 }
 
 // SendErrorBatch sends an error batch with retry logic
+// Returns nil immediately if batch is empty (no HTTP call)
 func (s *Sender) SendErrorBatch(ctx context.Context, errorBatch *ingest.ErrorBatch) error {
+	// Never send empty error batches
+	if errorBatch == nil || len(errorBatch.Errors) == 0 {
+		return nil
+	}
+
 	var lastErr error
 
 	for attempt := 0; attempt <= s.maxRetries; attempt++ {
