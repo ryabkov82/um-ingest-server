@@ -234,15 +234,27 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 				continue
 			}
 
-			// Send error batch
+			// Send error batch (required if errorsEndpoint is configured)
 			if errorSender != nil {
 				if err := errorSender.SendErrorBatch(jobCtx, errorBatch); err != nil {
-					log.Printf("Job %s: Error batch send error: %v", j.ID, err)
-					// Don't fail job on error batch send failure
+					log.Printf("Job %s: Error batch %d send error: %v", j.ID, errorBatch.BatchNo, err)
+					// Fail job if error batch delivery fails (errorsEndpoint is configured)
+					// Format error message with details
+					errorMsg := fmt.Sprintf("failed to deliver error batch %d to %s: %v", errorBatch.BatchNo, j.Delivery.ErrorsEndpoint, err)
+					if httpErr, ok := client.GetHTTPError(err); ok {
+						bodySnippet := httpErr.Body
+						if len(bodySnippet) > 200 {
+							bodySnippet = bodySnippet[:200] + "..."
+						}
+						errorMsg = fmt.Sprintf("failed to deliver error batch %d to %s: HTTP %d: %s", errorBatch.BatchNo, j.Delivery.ErrorsEndpoint, httpErr.StatusCode, bodySnippet)
+					}
+					store.UpdateError(j.ID, fmt.Errorf(errorMsg))
+					store.UpdateStatus(j.ID, job.StatusFailed)
+					return
 				} else {
 					errorsSent += int64(len(errorBatch.Errors))
 					store.UpdateErrors(j.ID, processor.GetErrorsTotal(), errorsSent)
-					log.Printf("Job %s: Error batch sent successfully (%d errors)", j.ID, len(errorBatch.Errors))
+					log.Printf("Job %s: Error batch %d sent successfully (%d errors)", j.ID, errorBatch.BatchNo, len(errorBatch.Errors))
 				}
 			}
 
@@ -278,15 +290,44 @@ done:
 		}
 	}
 
-	// Wait for any remaining error batches
+	// Wait for any remaining error batches (required if errorsEndpoint is configured)
 	if errorSender != nil && !errorChanClosed {
 		for errorBatch := range errorChan {
 			if err := errorSender.SendErrorBatch(jobCtx, errorBatch); err != nil {
-				log.Printf("Job %s: Final error batch send error: %v", j.ID, err)
+				log.Printf("Job %s: Final error batch %d send error: %v", j.ID, errorBatch.BatchNo, err)
+				// Fail job if error batch delivery fails (errorsEndpoint is configured)
+				errorMsg := fmt.Sprintf("failed to deliver error batch %d to %s: %v", errorBatch.BatchNo, j.Delivery.ErrorsEndpoint, err)
+				if httpErr, ok := client.GetHTTPError(err); ok {
+					bodySnippet := httpErr.Body
+					if len(bodySnippet) > 200 {
+						bodySnippet = bodySnippet[:200] + "..."
+					}
+					errorMsg = fmt.Sprintf("failed to deliver error batch %d to %s: HTTP %d: %s", errorBatch.BatchNo, j.Delivery.ErrorsEndpoint, httpErr.StatusCode, bodySnippet)
+				}
+				store.UpdateError(j.ID, fmt.Errorf(errorMsg))
+				store.UpdateStatus(j.ID, job.StatusFailed)
+				return
 			} else {
 				errorsSent += int64(len(errorBatch.Errors))
 				store.UpdateErrors(j.ID, processor.GetErrorsTotal(), errorsSent)
 			}
+		}
+	}
+
+	// Final check: if errorsEndpoint is configured and there are errors, ensure all were sent
+	if errorSender != nil {
+		errorsTotal := processor.GetErrorsTotal()
+		if errorsTotal > 0 && errorsSent == 0 {
+			// This should not happen if we processed all error batches correctly,
+			// but add a safety check
+			log.Printf("Job %s: WARNING: errorsEndpoint configured, errorsTotal=%d but errorsSent=0", j.ID, errorsTotal)
+		}
+		if errorsTotal > errorsSent {
+			// Some errors were not sent (should not happen, but safety check)
+			errorMsg := fmt.Sprintf("not all errors were delivered: errorsTotal=%d, errorsSent=%d", errorsTotal, errorsSent)
+			store.UpdateError(j.ID, fmt.Errorf(errorMsg))
+			store.UpdateStatus(j.ID, job.StatusFailed)
+			return
 		}
 	}
 

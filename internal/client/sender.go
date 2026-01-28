@@ -166,8 +166,8 @@ func (s *Sender) sendBatchOnce(ctx context.Context, batch *ingest.Batch) error {
 	}
 	defer resp.Body.Close()
 
-	// Check response
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+	// Check response (200, 201, 409 are success)
+	if resp.StatusCode == 200 || resp.StatusCode == 201 || resp.StatusCode == 409 {
 		return nil
 	}
 
@@ -314,6 +314,15 @@ func (s *Sender) sendErrorBatchOnce(ctx context.Context, errorBatch *ingest.Erro
 		req.Header.Set("Authorization", s.authHeader)
 	}
 
+	// Add error batch headers for idempotency
+	req.Header.Set("X-UM-PackageId", errorBatch.PackageID)
+	if errorBatch.JobID != "" {
+		req.Header.Set("X-UM-JobId", errorBatch.JobID)
+	}
+	if errorBatch.BatchNo > 0 {
+		req.Header.Set("X-UM-BatchNo", fmt.Sprintf("%d", errorBatch.BatchNo))
+	}
+
 	// Send request
 	resp, err := s.client.Do(req)
 	if err != nil {
@@ -321,8 +330,8 @@ func (s *Sender) sendErrorBatchOnce(ctx context.Context, errorBatch *ingest.Erro
 	}
 	defer resp.Body.Close()
 
-	// Check response
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+	// Check response (200, 201, 409 are success)
+	if resp.StatusCode == 200 || resp.StatusCode == 201 || resp.StatusCode == 409 {
 		return nil
 	}
 

@@ -11,6 +11,8 @@ type Batch struct {
 // ErrorBatch represents a batch of errors to send
 type ErrorBatch struct {
 	PackageID string      `json:"packageId"`
+	JobID     string      `json:"jobId,omitempty"` // For idempotency headers
+	BatchNo   int64       `json:"batchNo,omitempty"` // For idempotency headers
 	Errors    []ErrorItem `json:"errors"`
 }
 

@@ -21,7 +21,8 @@ type Processor struct {
 	errors        chan RowError
 	errorBuffer   []ErrorItem
 	errorsTotal   int64
-	mu            sync.Mutex // Protects errorsTotal
+	errorBatchNo  int64
+	mu            sync.Mutex // Protects errorsTotal and errorBatchNo
 }
 
 // NewProcessor creates a new processor
@@ -52,6 +53,7 @@ func NewProcessor(j *job.Job, store *job.Store, allowedBaseDir string) (*Process
 		errors:      make(chan RowError, 100),
 		errorBuffer: make([]ErrorItem, 0, j.Delivery.BatchSize),
 		errorsTotal: 0,
+		errorBatchNo: 0,
 	}, nil
 }
 
@@ -324,8 +326,15 @@ func (p *Processor) flushErrorBatch(ctx context.Context) {
 		return
 	}
 
+	p.mu.Lock()
+	p.errorBatchNo++
+	batchNo := p.errorBatchNo
+	p.mu.Unlock()
+
 	errorBatch := &ErrorBatch{
 		PackageID: p.job.PackageID,
+		JobID:     p.job.ID,
+		BatchNo:   batchNo,
 		Errors:    make([]ErrorItem, len(p.errorBuffer)),
 	}
 	copy(errorBatch.Errors, p.errorBuffer)
