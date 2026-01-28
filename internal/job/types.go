@@ -60,6 +60,7 @@ type FieldSpec struct {
 	Out              string                 `json:"out"`
 	Type             string                 `json:"type"` // "string", "int", "number", "date"
 	Source           SourceSpec             `json:"source"`
+	Required         bool                   `json:"required,omitempty"` // default: false
 	DateFormat       string                 `json:"dateFormat,omitempty"`
 	DateFallbacks    []string               `json:"dateFallbacks,omitempty"`
 	DecimalSeparator string                 `json:"decimalSeparator,omitempty"`

@@ -49,7 +49,21 @@ func (t *Transformer) TransformRow(parser *Parser, row []string) (map[string]int
 			return nil, fmt.Errorf("field %s: index %d out of range (row has %d columns)", field.Out, idx, len(row))
 		}
 
-		value := strings.TrimSpace(row[idx])
+		rawValue := row[idx]
+		value := strings.TrimSpace(rawValue)
+
+		// Check required constraint before type parsing
+		if field.Required && value == "" {
+			return nil, fmt.Errorf("required field %s is empty", field.Out)
+		}
+
+		// If not required and empty, skip type parsing (return nil to omit field)
+		if !field.Required && value == "" {
+			// For non-required empty fields, skip adding to result
+			// This means the field won't appear in the output map
+			continue
+		}
+
 		transformed, err := t.transformValue(field, value)
 		if err != nil {
 			return nil, fmt.Errorf("field %s: %w", field.Out, err)
@@ -62,8 +76,9 @@ func (t *Transformer) TransformRow(parser *Parser, row []string) (map[string]int
 }
 
 // transformValue converts a string value to the target type
+// Note: required check and empty value handling is done in TransformRow before calling this
 func (t *Transformer) transformValue(field job.FieldSpec, value string) (interface{}, error) {
-	// Check maxLen constraint
+	// Check maxLen constraint (only for non-empty values)
 	if maxLen, ok := field.Constraints["maxLen"].(float64); ok {
 		if int(maxLen) > 0 && len(value) > int(maxLen) {
 			return nil, fmt.Errorf("value exceeds maxLen %d", int(maxLen))

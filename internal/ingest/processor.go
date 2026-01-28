@@ -244,8 +244,32 @@ func (p *Processor) createErrorItem(rowNo int64, err error, row []string) ErrorI
 	value := ""
 	message := err.Error()
 
-	// Try to extract field name from error message (format: "field FieldName: error message")
-	if strings.HasPrefix(message, "field ") {
+	// Check if it's a RequiredFieldError (from transformer package)
+	// RequiredFieldError.Error() returns "required field FieldName is empty"
+	if strings.Contains(message, "required field") && strings.Contains(message, "is empty") {
+		errorCode = "ПустоеОбязательноеПоле"
+		// Extract field name from message: "required field FieldName is empty"
+		parts := strings.Fields(message)
+		if len(parts) >= 3 {
+			field = parts[2] // "FieldName"
+		}
+		message = "required field is empty"
+		// Try to get value from row
+		if p.transformer != nil {
+			for i, f := range p.job.Schema.Fields {
+				if f.Out == field {
+					if i < len(p.transformer.indexes) {
+						idx := p.transformer.indexes[i]
+						if idx >= 0 && idx < len(row) {
+							value = row[idx]
+						}
+					}
+					break
+				}
+			}
+		}
+	} else if strings.HasPrefix(message, "field ") {
+		// Try to extract field name from error message (format: "field FieldName: error message")
 		parts := strings.SplitN(message, ": ", 2)
 		if len(parts) == 2 {
 			fieldPart := strings.TrimPrefix(parts[0], "field ")
@@ -268,12 +292,14 @@ func (p *Processor) createErrorItem(rowNo int64, err error, row []string) ErrorI
 	}
 
 	// Get value if field is known
-	if field != "" {
+	if field != "" && p.transformer != nil {
 		for i, f := range p.job.Schema.Fields {
 			if f.Out == field {
-				idx := p.transformer.indexes[i]
-				if idx >= 0 && idx < len(row) {
-					value = row[idx]
+				if i < len(p.transformer.indexes) {
+					idx := p.transformer.indexes[i]
+					if idx >= 0 && idx < len(row) {
+						value = row[idx]
+					}
 				}
 				break
 			}

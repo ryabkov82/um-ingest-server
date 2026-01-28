@@ -205,6 +205,7 @@ curl http://localhost:8080/version
       {
         "out": "ИмяПоля",
         "type": "string",
+        "required": false,
         "source": {
           "by": "order",
           "index": 0
@@ -216,6 +217,7 @@ curl http://localhost:8080/version
       {
         "out": "ДатаОпер",
         "type": "date",
+        "required": true,
         "source": {
           "by": "header",
           "name": "OperationDate"
@@ -607,6 +609,7 @@ Authorization: Basic dXNlcjpwYXNz
 - `НеПреобразуетсяВДату` — ошибка парсинга даты
 - `НеПреобразуетсяВЧисло` — ошибка парсинга числа
 - `СлишкомДлинноеЗначение` — превышение maxLen
+- `ПустоеОбязательноеПоле` — обязательное поле (`required: true`) пустое после `TrimSpace`
 - `НедопустимоеЗначение` — прочие ошибки валидации
 
 ## Обработка ошибок
