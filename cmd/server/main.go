@@ -125,6 +125,8 @@ func worker(ctx context.Context, store *job.Store, allowedBaseDir, env1CUser, en
 
 // processJob processes a single job
 func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDir, env1CUser, env1CPass string) {
+	debugErrors := os.Getenv("UM_DEBUG_ERRORS") == "1"
+
 	// Create cancel context for this job from parent context
 	jobCtx, jobCancel := context.WithCancel(ctx)
 	defer jobCancel()
@@ -242,6 +244,21 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 					continue
 				}
 
+				if debugErrors {
+					first := errorBatch.Errors[0]
+					log.Printf("[debug] job=%s errorBatch: batchNo=%d errors=%d first={rowNo=%d code=%q msg=%q} processorErrorsTotal=%d storeRowsRead=%d storeErrorsTotal=%d",
+						j.ID,
+						errorBatch.BatchNo,
+						len(errorBatch.Errors),
+						first.RowNo,
+						first.Code,
+						first.Message,
+						processor.GetErrorsTotal(),
+						j.RowsRead,
+						j.ErrorsTotal,
+					)
+				}
+
 				if err := errorSender.SendErrorBatch(jobCtx, errorBatch); err != nil {
 					log.Printf("Job %s: Error batch %d send error: %v", j.ID, errorBatch.BatchNo, err)
 					// Fail job if error batch delivery fails (errorsEndpoint is configured)
@@ -254,6 +271,8 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 						}
 						errorMsg = fmt.Sprintf("failed to deliver error batch %d to %s: HTTP %d: %s", errorBatch.BatchNo, j.Delivery.ErrorsEndpoint, httpErr.StatusCode, bodySnippet)
 					}
+					// Best-effort: persist current error counters before failing
+					store.UpdateErrors(j.ID, processor.GetErrorsTotal(), errorsSent)
 					store.UpdateError(j.ID, fmt.Errorf(errorMsg))
 					store.UpdateStatus(j.ID, job.StatusFailed)
 					return

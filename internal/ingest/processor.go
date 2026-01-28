@@ -3,6 +3,8 @@ package ingest
 import (
 	"context"
 	"io"
+	"log"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -117,22 +119,32 @@ func (p *Processor) parseAndBatch(ctx context.Context) error {
 	var currentBatch []map[string]interface{}
 	var rowsRead, rowsSkipped int64
 	var batchNo int64
+	debugErrors := os.Getenv("UM_DEBUG_ERRORS") == "1"
 
 	for {
 		select {
 		case <-ctx.Done():
+			if debugErrors {
+				log.Printf("[debug] job=%s parseAndBatch: ctx done before read; rowsRead=%d rowsSkipped=%d errorsTotal=%d", p.job.ID, rowsRead, rowsSkipped, p.GetErrorsTotal())
+			}
 			return ctx.Err()
 		default:
 		}
 
 		row, err := p.parser.ReadRow(ctx)
 		if err == context.Canceled {
+			if debugErrors {
+				log.Printf("[debug] job=%s parseAndBatch: read canceled; rowsRead=%d rowsSkipped=%d errorsTotal=%d", p.job.ID, rowsRead, rowsSkipped, p.GetErrorsTotal())
+			}
 			return err
 		}
 		if err != nil {
 			// EOF is normal
 			if err == io.EOF {
 				break
+			}
+			if debugErrors {
+				log.Printf("[debug] job=%s parseAndBatch: read error before rows++: %v (rowsRead=%d)", p.job.ID, err, rowsRead)
 			}
 			return err
 		}
@@ -168,6 +180,8 @@ func (p *Processor) parseAndBatch(ctx context.Context) error {
 			if p.job.Delivery.ErrorsEndpoint != "" {
 				errorItem := p.createErrorItem(rowNo, err, row)
 				p.errorBuffer = append(p.errorBuffer, errorItem)
+				// Persist parse progress eagerly: this is important if job fails fast on errors delivery
+				p.store.UpdateParseProgress(p.job.ID, rowsRead, rowsSkipped, batchNo)
 				
 				// Send error batch when buffer is full
 				if len(p.errorBuffer) >= p.job.Delivery.BatchSize {
@@ -323,6 +337,8 @@ func (p *Processor) createErrorItem(rowNo int64, err error, row []string) ErrorI
 // flushErrorBatch sends buffered errors to error channel
 // Only sends if there are actual errors (len > 0)
 func (p *Processor) flushErrorBatch(ctx context.Context) {
+	debugErrors := os.Getenv("UM_DEBUG_ERRORS") == "1"
+
 	if len(p.errorBuffer) == 0 {
 		return
 	}
@@ -332,6 +348,11 @@ func (p *Processor) flushErrorBatch(ctx context.Context) {
 		// Clear buffer but don't send
 		p.errorBuffer = p.errorBuffer[:0]
 		return
+	}
+
+	if debugErrors {
+		first := p.errorBuffer[0]
+		log.Printf("[debug] job=%s flushErrorBatch: bufferLen=%d first={rowNo=%d code=%q msg=%q}", p.job.ID, len(p.errorBuffer), first.RowNo, first.Code, first.Message)
 	}
 
 	p.mu.Lock()
