@@ -11,6 +11,7 @@ import (
 
 	"github.com/ryabkov82/um-ingest-server/internal/ingest"
 	"github.com/ryabkov82/um-ingest-server/internal/job"
+	"github.com/ryabkov82/um-ingest-server/internal/version"
 )
 
 // Handler handles HTTP requests
@@ -45,13 +46,13 @@ func (h *Handler) CreateJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		PackageID    string                 `json:"packageId"`
-		InputPath    string                 `json:"inputPath"`
-		CSV          job.CSVConfig          `json:"csv"`
-		Schema       job.SchemaConfig       `json:"schema"`
-		Delivery     job.DeliveryConfig     `json:"delivery"`
-		ErrorsJsonl  string                 `json:"errorsJsonl"`
-		ProgressEvery int                   `json:"progressEvery"`
+		PackageID     string             `json:"packageId"`
+		InputPath     string             `json:"inputPath"`
+		CSV           job.CSVConfig      `json:"csv"`
+		Schema        job.SchemaConfig   `json:"schema"`
+		Delivery      job.DeliveryConfig `json:"delivery"`
+		ErrorsJsonl   string             `json:"errorsJsonl"`
+		ProgressEvery int                `json:"progressEvery"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -156,7 +157,7 @@ func (h *Handler) CreateJob(w http.ResponseWriter, r *http.Request) {
 			if existingJobID != "" {
 				existingJob, _ = h.store.Get(existingJobID)
 			}
-			
+
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusConflict)
 			response := map[string]interface{}{
@@ -295,16 +296,16 @@ func (h *Handler) GetJobByPackage(w http.ResponseWriter, r *http.Request) {
 
 	// Return same format as GET /jobs/{jobId} but with jobId included
 	response := map[string]interface{}{
-		"jobId":         j.ID,
-		"status":        j.Status,
-		"rowsRead":      j.RowsRead,
-		"rowsSent":      j.RowsSent,
+		"jobId":          j.ID,
+		"status":         j.Status,
+		"rowsRead":       j.RowsRead,
+		"rowsSent":       j.RowsSent,
 		"rowsSkipped":    j.RowsSkipped,
-		"batchesSent":   j.BatchesSent,
+		"batchesSent":    j.BatchesSent,
 		"currentBatchNo": j.CurrentBatchNo,
-		"errorsTotal":   j.ErrorsTotal,
-		"errorsSent":    j.ErrorsSent,
-		"inputPath":     j.InputPath,
+		"errorsTotal":    j.ErrorsTotal,
+		"errorsSent":     j.ErrorsSent,
+		"inputPath":      j.InputPath,
 	}
 
 	if j.StartedAt != nil {
@@ -411,3 +412,14 @@ func (h *Handler) CancelJob(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// GetVersion handles GET /version
+func (h *Handler) GetVersion(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	info := version.Info()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(info)
+}

@@ -22,9 +22,43 @@ HTTP-сервис для парсинга больших CSV файлов и о�
 
 ## Установка
 
+### Базовая сборка
+
 ```bash
 go build -o um-ingest-server ./cmd/server
 ```
+
+### Сборка с версионированием
+
+Для сборки с информацией о версии используйте `-ldflags`:
+
+```bash
+VERSION=$(git describe --tags --always 2>/dev/null || echo "dev")
+GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+go build -ldflags "\
+  -X 'github.com/ryabkov82/um-ingest-server/internal/version.Version=${VERSION}' \
+  -X 'github.com/ryabkov82/um-ingest-server/internal/version.GitCommit=${GIT_COMMIT}' \
+  -X 'github.com/ryabkov82/um-ingest-server/internal/version.BuildTime=${BUILD_TIME}'" \
+  -o um-ingest-server ./cmd/server
+```
+
+Или используйте переменные окружения:
+
+```bash
+export VERSION=$(git describe --tags --always 2>/dev/null || echo "dev")
+export GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+export BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+go build -ldflags "\
+  -X 'github.com/ryabkov82/um-ingest-server/internal/version.Version=${VERSION}' \
+  -X 'github.com/ryabkov82/um-ingest-server/internal/version.GitCommit=${GIT_COMMIT}' \
+  -X 'github.com/ryabkov82/um-ingest-server/internal/version.BuildTime=${BUILD_TIME}'" \
+  -o um-ingest-server ./cmd/server
+```
+
+**Примечание:** Если `git` недоступен, переменные получат значения по умолчанию (`dev`, `unknown`).
 
 ## Конфигурация
 
@@ -48,6 +82,43 @@ export UM_1C_BASIC_USER=1c_user
 export UM_1C_BASIC_PASS=1c_password
 ./um-ingest-server
 ```
+
+## Проверка версии
+
+### Через CLI
+
+```bash
+./um-ingest-server --version
+```
+
+Вывод:
+```
+um-ingest-server v1.2.3 (commit abcdef1, built 2026-01-28T10:00:00Z)
+```
+
+Для JSON формата:
+```bash
+./um-ingest-server --build-info
+```
+
+### Через HTTP API
+
+```bash
+curl http://localhost:8080/version
+```
+
+Ответ:
+```json
+{
+  "name": "um-ingest-server",
+  "version": "1.2.3",
+  "gitCommit": "abcdef1",
+  "buildTime": "2026-01-28T10:00:00Z",
+  "goVersion": "go1.22.3"
+}
+```
+
+**Примечание:** Endpoint `/version` не требует аутентификации, что позволяет быстро проверить версию развернутого сервиса.
 
 ## API
 

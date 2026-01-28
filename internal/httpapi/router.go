@@ -9,6 +9,9 @@ import (
 func SetupRouter(handler *Handler) http.Handler {
 	mux := http.NewServeMux()
 
+	// GET /version
+	mux.HandleFunc("/version", handler.GetVersion)
+
 	// POST /jobs
 	mux.HandleFunc("/jobs", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
@@ -58,6 +61,16 @@ func SetupRouter(handler *Handler) http.Handler {
 		}
 	})
 
-	return AuthMiddleware(mux)
+	// Apply auth middleware, but exclude /version endpoint
+	wrapped := AuthMiddleware(mux)
+	
+	// Wrap to exclude /version from auth
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/version" {
+			mux.ServeHTTP(w, r)
+			return
+		}
+		wrapped.ServeHTTP(w, r)
+	})
 }
 

@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -13,9 +15,35 @@ import (
 	"github.com/ryabkov82/um-ingest-server/internal/httpapi"
 	"github.com/ryabkov82/um-ingest-server/internal/ingest"
 	"github.com/ryabkov82/um-ingest-server/internal/job"
+	"github.com/ryabkov82/um-ingest-server/internal/version"
 )
 
 func main() {
+	// Handle --version flag
+	showVersion := flag.Bool("version", false, "Show version information")
+	showBuildInfo := flag.Bool("build-info", false, "Show build information in JSON format")
+	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(version.String())
+		os.Exit(0)
+	}
+
+	if *showBuildInfo {
+		info := version.Info()
+		fmt.Printf("{\n")
+		fmt.Printf("  \"name\": \"%s\",\n", info["name"])
+		fmt.Printf("  \"version\": \"%s\",\n", info["version"])
+		fmt.Printf("  \"gitCommit\": \"%s\",\n", info["gitCommit"])
+		fmt.Printf("  \"buildTime\": \"%s\",\n", info["buildTime"])
+		fmt.Printf("  \"goVersion\": \"%s\"\n", info["goVersion"])
+		fmt.Printf("}\n")
+		os.Exit(0)
+	}
+
+	// Log version at startup
+	log.Printf("Starting %s", version.String())
+
 	// Get configuration from environment
 	allowedBaseDir := os.Getenv("ALLOWED_BASE_DIR")
 	if allowedBaseDir == "" {
