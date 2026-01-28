@@ -21,6 +21,7 @@ type Store struct {
 	mu                sync.RWMutex
 	jobs              map[string]*Job              // jobId -> Job
 	activeJobByPackage map[string]string           // packageId -> jobId (only for queued/running)
+	lastJobByPackage   map[string]string           // packageId -> jobId (last completed job)
 	queue             chan *Job
 	cancels           map[string]context.CancelFunc
 }
@@ -30,6 +31,7 @@ func NewStore() *Store {
 	return &Store{
 		jobs:              make(map[string]*Job),
 		activeJobByPackage: make(map[string]string),
+		lastJobByPackage:   make(map[string]string),
 		queue:             make(chan *Job, 1000),
 		cancels:           make(map[string]context.CancelFunc),
 	}
@@ -113,6 +115,10 @@ func (s *Store) UpdateStatus(id string, status JobStatus) error {
 			if s.activeJobByPackage[j.PackageID] == id {
 				delete(s.activeJobByPackage, j.PackageID)
 			}
+		}
+		// Save as last job for this packageId
+		if j.PackageID != "" {
+			s.lastJobByPackage[j.PackageID] = id
 		}
 	}
 
@@ -250,6 +256,11 @@ func (s *Store) Cancel(id string) error {
 		delete(s.activeJobByPackage, j.PackageID)
 	}
 	
+	// Save as last job for this packageId
+	if j.PackageID != "" {
+		s.lastJobByPackage[j.PackageID] = id
+	}
+	
 	s.mu.Unlock()
 
 	// Call cancel function outside of lock
@@ -285,6 +296,27 @@ func (s *Store) GetActiveJobByPackage(packageID string) (string, error) {
 	job, ok := s.jobs[jobID]
 	if !ok || (job.Status != StatusQueued && job.Status != StatusRunning) {
 		// Stale entry, will be cleaned up on next status update
+		return "", nil
+	}
+
+	return jobID, nil
+}
+
+// GetLastJobByPackage returns the last completed job ID for a given packageId
+// Returns empty string if no last job exists
+func (s *Store) GetLastJobByPackage(packageID string) (string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	jobID, exists := s.lastJobByPackage[packageID]
+	if !exists {
+		return "", nil
+	}
+
+	// Verify the job still exists
+	_, ok := s.jobs[jobID]
+	if !ok {
+		// Job was removed from jobs map, remove from lastJobByPackage too
 		return "", nil
 	}
 

@@ -267,15 +267,24 @@ func (h *Handler) GetJobByPackage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// First, try to get active job
 	jobID, err := h.store.GetActiveJobByPackage(packageID)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Internal error: %v", err), http.StatusInternalServerError)
 		return
 	}
 
+	// If no active job, try to get last job
 	if jobID == "" {
-		http.Error(w, "No active job found for this packageId", http.StatusNotFound)
-		return
+		jobID, err = h.store.GetLastJobByPackage(packageID)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Internal error: %v", err), http.StatusInternalServerError)
+			return
+		}
+		if jobID == "" {
+			http.Error(w, "Job not found", http.StatusNotFound)
+			return
+		}
 	}
 
 	j, err := h.store.Get(jobID)

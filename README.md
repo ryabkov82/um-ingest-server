@@ -190,15 +190,19 @@ export UM_1C_BASIC_PASS=1c_password
 
 ### GET /packages/{packageId}/job
 
-Получить статус активного задания по `packageId` (для работы 1С без хранения jobId).
+Получить статус задания по `packageId` (для работы 1С без хранения jobId).
+
+**Поведение:**
+1. Если есть активное задание (статус `queued` или `running`):
+   - **200 OK** с телом, аналогичным `GET /jobs/{jobId}`, но дополнительно включающим поле `jobId`
+2. Если активного задания нет, но есть последнее завершённое задание для этого `packageId`:
+   - **200 OK** с телом последнего задания (включая `finishedAt`, `lastError` и т.д.)
+3. Если заданий для `packageId` никогда не было:
+   - **404 Not Found**
 
 **Ответ:**
-- Если активное задание найдено (статус `queued` или `running`):
-  - **200 OK** с телом, аналогичным `GET /jobs/{jobId}`, но дополнительно включающим поле `jobId`
-- Если активного задания нет:
-  - **404 Not Found**
 
-**Пример ответа:**
+**Пример ответа (активное задание):**
 ```json
 {
   "jobId": "550e8400-e29b-41d4-a716-446655440000",
@@ -211,6 +215,45 @@ export UM_1C_BASIC_PASS=1c_password
   "currentBatchNo": 74,
   "errorsTotal": 50,
   "errorsSent": 48,
+  "inputPath": "/data/incoming/data.csv",
+  "fileType": "csv"
+}
+```
+
+**Пример ответа (последнее завершённое задание):**
+```json
+{
+  "jobId": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "succeeded",
+  "startedAt": "2026-01-31T10:00:00Z",
+  "finishedAt": "2026-01-31T10:05:00Z",
+  "rowsRead": 500000,
+  "rowsSent": 500000,
+  "rowsSkipped": 0,
+  "batchesSent": 250,
+  "currentBatchNo": 250,
+  "errorsTotal": 0,
+  "errorsSent": 0,
+  "inputPath": "/data/incoming/data.csv",
+  "fileType": "csv"
+}
+```
+
+**Пример ответа (последнее задание с ошибкой):**
+```json
+{
+  "jobId": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "failed",
+  "startedAt": "2026-01-31T10:00:00Z",
+  "finishedAt": "2026-01-31T10:02:00Z",
+  "lastError": "Connection timeout",
+  "rowsRead": 100000,
+  "rowsSent": 95000,
+  "rowsSkipped": 5000,
+  "batchesSent": 47,
+  "currentBatchNo": 48,
+  "errorsTotal": 10,
+  "errorsSent": 8,
   "inputPath": "/data/incoming/data.csv",
   "fileType": "csv"
 }
