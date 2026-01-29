@@ -145,9 +145,9 @@ func TestTransformerReturnsMap(t *testing.T) {
 		t.Fatalf("ReadRow() error = %v", err)
 	}
 
-	result, err := transformer.TransformRow(parser, row)
-	if err != nil {
-		t.Fatalf("TransformRow() error = %v", err)
+	result, fieldErrors := transformer.TransformRow(parser, row)
+	if len(fieldErrors) > 0 {
+		t.Fatalf("TransformRow() returned errors: %v", fieldErrors)
 	}
 
 	// Verify result is a map

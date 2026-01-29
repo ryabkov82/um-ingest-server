@@ -17,13 +17,13 @@ import (
 
 // Parser handles CSV parsing and field mapping
 type Parser struct {
-	job         *job.Job
-	file        *os.File
-	reader      *csv.Reader
-	headerMap   map[string]int
-	rowNo       int64
-	errorsFile  *os.File
-	errorsWriter *bufio.Writer
+	job           *job.Job
+	file          *os.File
+	reader        *csv.Reader
+	headerMap     map[string]int
+	rowNo         int64
+	errorsFile    *os.File
+	errorsWriter  *bufio.Writer
 	errorsEncoder *json.Encoder
 }
 
@@ -176,4 +176,3 @@ func (p *Parser) LogError(rowNo int64, message string, row []string) {
 		fmt.Printf("Failed to write error log: %v\n", err)
 	}
 }
-

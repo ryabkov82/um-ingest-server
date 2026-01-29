@@ -164,34 +164,40 @@ func (p *Processor) parseAndBatch(ctx context.Context) error {
 		}
 
 		// Transform row
-		transformed, err := p.transformer.TransformRow(p.parser, row)
-		if err != nil {
-			// Handle error
-			rowsSkipped++
-			p.mu.Lock()
-			p.errorsTotal++
-			p.mu.Unlock()
+		transformed, fieldErrors := p.transformer.TransformRow(p.parser, row)
+		
+		// Always add row to batch, even if there are field-level errors
+		currentBatch = append(currentBatch, transformed)
+		
+		// Process field-level errors (if any)
+		if len(fieldErrors) > 0 {
 			rowNo := p.parser.GetRowNo()
 			
-			// Log to JSONL file if configured
-			p.parser.LogError(rowNo, err.Error(), row)
+			// Update error counters
+			p.mu.Lock()
+			p.errorsTotal += int64(len(fieldErrors))
+			p.mu.Unlock()
 			
-			// Create error item and buffer for 1C if errorsEndpoint is configured
-			if p.job.Delivery.ErrorsEndpoint != "" {
-				errorItem := p.createErrorItem(rowNo, err, row)
-				p.errorBuffer = append(p.errorBuffer, errorItem)
-				// Persist parse progress eagerly: this is important if job fails fast on errors delivery
-				p.store.UpdateParseProgress(p.job.ID, rowsRead, rowsSkipped, batchNo)
+			// For each field error, log and create error item
+			for _, fieldErr := range fieldErrors {
+				// Log to JSONL file if configured
+				p.parser.LogError(rowNo, fieldErr.Error(), row)
 				
-				// Send error batch when buffer is full
-				if len(p.errorBuffer) >= p.job.Delivery.BatchSize {
-					p.flushErrorBatch(ctx)
+				// Create error item and buffer for 1C if errorsEndpoint is configured
+				if p.job.Delivery.ErrorsEndpoint != "" {
+					errorItem := p.createErrorItem(rowNo, fieldErr, row)
+					p.errorBuffer = append(p.errorBuffer, errorItem)
+					
+					// Send error batch when buffer is full
+					if len(p.errorBuffer) >= p.job.Delivery.BatchSize {
+						p.flushErrorBatch(ctx)
+					}
 				}
 			}
-			continue
+			
+			// Persist parse progress eagerly: this is important if job fails fast on errors delivery
+			p.store.UpdateParseProgress(p.job.ID, rowsRead, rowsSkipped, batchNo)
 		}
-
-		currentBatch = append(currentBatch, transformed)
 
 		// Send batch when full
 		if len(currentBatch) >= p.job.Delivery.BatchSize {

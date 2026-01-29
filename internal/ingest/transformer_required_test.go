@@ -96,14 +96,22 @@ func TestRequiredFieldStringEmpty(t *testing.T) {
 		t.Errorf("Expected message 'required field is empty', got '%s'", errItem.Message)
 	}
 
-	// Check that no data batch was sent (row was skipped)
+	// Check that data batch was sent (row is NOT skipped anymore, even with required field error)
 	select {
 	case batch := <-processor.GetBatchChan():
-		if batch != nil {
-			t.Errorf("Expected no data batch, but got batch with %d rows", len(batch.Rows))
+		if batch == nil {
+			t.Error("Expected data batch, but got nil")
+		} else if len(batch.Rows) != 1 {
+			t.Errorf("Expected batch with 1 row, but got batch with %d rows", len(batch.Rows))
+		} else {
+			// Verify the row is in the batch (even though it has a required field error)
+			row := batch.Rows[0]
+			if row == nil {
+				t.Error("Expected row in batch, but got nil")
+			}
 		}
 	default:
-		// Good, no batch sent
+		t.Error("Expected data batch, but none was sent (row was skipped, but it should not be)")
 	}
 
 	// Wait for processing to complete

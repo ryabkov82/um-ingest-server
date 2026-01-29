@@ -33,8 +33,12 @@ func NewTransformer(j *job.Job, parser *Parser) (*Transformer, error) {
 }
 
 // TransformRow transforms a CSV row to a map[string]interface{} according to schema
-func (t *Transformer) TransformRow(parser *Parser, row []string) (map[string]interface{}, error) {
+// Returns the transformed row and a list of field-level errors (if any).
+// Row-level errors (required, type conversion, maxLen, index out of range) do NOT prevent
+// the row from being returned - they are collected in the errors slice.
+func (t *Transformer) TransformRow(parser *Parser, row []string) (map[string]interface{}, []error) {
 	result := make(map[string]interface{}, len(t.job.Schema.Fields)+1)
+	var fieldErrors []error
 
 	// Add row number if needed
 	if t.job.Schema.IncludeRowNo {
@@ -46,7 +50,9 @@ func (t *Transformer) TransformRow(parser *Parser, row []string) (map[string]int
 		idx := t.indexes[i]
 
 		if idx < 0 || idx >= len(row) {
-			return nil, fmt.Errorf("field %s: index %d out of range (row has %d columns)", field.Out, idx, len(row))
+			// Index out of range - add to errors but continue
+			fieldErrors = append(fieldErrors, fmt.Errorf("field %s: index %d out of range (row has %d columns)", field.Out, idx, len(row)))
+			continue
 		}
 
 		rawValue := row[idx]
@@ -54,7 +60,9 @@ func (t *Transformer) TransformRow(parser *Parser, row []string) (map[string]int
 
 		// Check required constraint before type parsing
 		if field.Required && value == "" {
-			return nil, fmt.Errorf("required field %s is empty", field.Out)
+			// Required field empty - add to errors but continue
+			fieldErrors = append(fieldErrors, fmt.Errorf("required field %s is empty", field.Out))
+			continue
 		}
 
 		// If not required and empty, skip type parsing (return nil to omit field)
@@ -66,13 +74,15 @@ func (t *Transformer) TransformRow(parser *Parser, row []string) (map[string]int
 
 		transformed, err := t.transformValue(field, value)
 		if err != nil {
-			return nil, fmt.Errorf("field %s: %w", field.Out, err)
+			// Type conversion or maxLen error - add to errors but continue
+			fieldErrors = append(fieldErrors, fmt.Errorf("field %s: %w", field.Out, err))
+			continue
 		}
 
 		result[field.Out] = transformed
 	}
 
-	return result, nil
+	return result, fieldErrors
 }
 
 // transformValue converts a string value to the target type
