@@ -204,6 +204,11 @@ func (s *Store) UpdateError(id string, err error) {
 	}
 
 	if err != nil {
+		// Don't overwrite LastError with context.Canceled if it's already set
+		// This preserves the real fatal error (e.g., HTTP 406) that caused the cancel
+		if err == context.Canceled && j.LastError != "" {
+			return
+		}
 		j.LastError = err.Error()
 	} else {
 		j.LastError = ""

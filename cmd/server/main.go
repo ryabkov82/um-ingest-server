@@ -420,8 +420,8 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 
 			// Enqueue error batch for async sending (required if errorsEndpoint is configured)
 			if asyncErrorSender != nil {
-				if len(errorBatch.Errors) == 0 {
-					// Skip empty error batches
+				if errorBatch == nil || len(errorBatch.Errors) == 0 {
+					// Skip nil or empty error batches
 					continue
 				}
 

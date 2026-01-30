@@ -88,9 +88,15 @@ func (a *AsyncErrorSender) worker(ctx context.Context) {
 		// Any error is fatal for error batch delivery
 		err := a.base.SendErrorBatch(ctx, errorBatch)
 		if err != nil {
-			// Fatal error - store it and cancel context
+			// Fatal error - log, store it, save to store, then cancel context
 			a.errOnce.Do(func() {
 				a.err.Store(err)
+				// Log fatal error with details
+				a.logFatalError(errorBatch.BatchNo, err)
+				// Call callback to save error in store (before cancel)
+				if a.onFatalError != nil {
+					a.onFatalError(a.jobID, errorBatch.BatchNo, "errors", err)
+				}
 				if a.cancel != nil {
 					a.cancel()
 				}

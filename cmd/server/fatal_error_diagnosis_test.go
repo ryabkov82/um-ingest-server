@@ -262,3 +262,129 @@ func TestFatalError406(t *testing.T) {
 	t.Logf("Job status: %s, LastError: %s, rowsSent=%d, batchesSent=%d", finalJob.Status, finalJob.LastError, finalJob.RowsSent, finalJob.BatchesSent)
 }
 
+// TestFatalErrorFromErrorsEndpoint tests that fatal HTTP error (406) from errors endpoint
+// results in job failed with lastError containing "406" (not "context canceled")
+func TestFatalErrorFromErrorsEndpoint(t *testing.T) {
+	// Create temporary directory for test files
+	tmpDir, err := os.MkdirTemp("", "um-ingest-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create test CSV file with one row that will cause an error
+	csvFile := filepath.Join(tmpDir, "test.csv")
+	var csvBuilder strings.Builder
+	csvBuilder.WriteString("Name,Date,Amount\n")
+	// Create a row with invalid date to trigger an error
+	csvBuilder.WriteString("item1,invalid-date,100\n")
+	if err := os.WriteFile(csvFile, []byte(csvBuilder.String()), 0644); err != nil {
+		t.Fatalf("Failed to write CSV: %v", err)
+	}
+
+	// Create httptest server for data endpoint (returns 200 OK)
+	var dataRequestCount int
+	dataServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		dataRequestCount++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer dataServer.Close()
+
+	// Create httptest server for errors endpoint (returns 406)
+	var errorsRequestCount int
+	errorsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		errorsRequestCount++
+		// Return 406 (Not Acceptable) with delay to ensure onFatalError completes
+		time.Sleep(75 * time.Millisecond)
+		w.WriteHeader(http.StatusNotAcceptable) // 406
+		w.Write([]byte("Not Acceptable"))
+	}))
+	defer errorsServer.Close()
+
+	// Create job with errorsEndpoint configured
+	j := &job.Job{
+		PackageID: "test-pkg-errors-406",
+		InputPath: csvFile,
+		CSV: job.CSVConfig{
+			Encoding:  "utf-8",
+			Delimiter: ",",
+			HasHeader: true,
+			MapBy:     "header",
+		},
+		Schema: job.SchemaConfig{
+			Register:     "TestRegister",
+			IncludeRowNo: true,
+			RowNoField:   "НомерСтрокиФайла",
+			Fields: []job.FieldSpec{
+				{Out: "Name", Type: "string", Source: job.SourceSpec{By: "header", Name: "Name"}},
+				{Out: "Date", Type: "date", Source: job.SourceSpec{By: "header", Name: "Date"}, DateFormat: "DD.MM.YYYY"},
+				{Out: "Amount", Type: "number", Source: job.SourceSpec{By: "header", Name: "Amount"}},
+			},
+		},
+		Delivery: job.DeliveryConfig{
+			Endpoint:       dataServer.URL,
+			ErrorsEndpoint: errorsServer.URL, // Configure errors endpoint
+			Gzip:           false,
+			BatchSize:      5,
+			TimeoutSeconds: 5,
+			MaxRetries:     0, // No retries to fail fast
+			BackoffMs:      10,
+			BackoffMaxMs:   100,
+		},
+		ProgressEvery: 1000,
+	}
+
+	// Create store and job
+	store := job.NewStore()
+	jobID, err := store.Create(j)
+	if err != nil {
+		t.Fatalf("Failed to create job: %v", err)
+	}
+	j.ID = jobID
+
+	// Process job
+	processJob(context.Background(), j, store, tmpDir, "", "", 1, 8, 1, 8)
+
+	// Wait for async operations to complete
+	deadline := time.Now().Add(500 * time.Millisecond)
+	var finalJob *job.Job
+	for time.Now().Before(deadline) {
+		var err error
+		finalJob, err = store.Get(jobID)
+		if err != nil {
+			t.Fatalf("Failed to get job: %v", err)
+		}
+		if finalJob.Status == job.StatusSucceeded || finalJob.Status == job.StatusFailed {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if finalJob == nil {
+		finalJob, _ = store.Get(jobID)
+	}
+
+	// Verify that errors endpoint was called
+	if errorsRequestCount == 0 {
+		t.Error("Expected errors endpoint to be called, but it wasn't")
+	}
+
+	// Verify job status is failed
+	if finalJob.Status != job.StatusFailed {
+		t.Errorf("Expected job status to be failed, got %s", finalJob.Status)
+	}
+
+	// Verify that error message contains "406" and NOT "context canceled"
+	if finalJob.LastError == "" {
+		t.Error("Expected LastError to be set, but it's empty")
+	} else {
+		if !strings.Contains(finalJob.LastError, "406") {
+			t.Errorf("Expected LastError to contain '406', got: %s", finalJob.LastError)
+		}
+		if strings.Contains(finalJob.LastError, "context canceled") {
+			t.Errorf("Expected LastError to NOT contain 'context canceled', got: %s", finalJob.LastError)
+		}
+	}
+
+	t.Logf("Job status: %s, LastError: %s", finalJob.Status, finalJob.LastError)
+}
+
