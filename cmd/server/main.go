@@ -376,11 +376,9 @@ done:
 		sendErr = err
 	}
 
-	var errorSendErr error
 	if asyncErrorSender != nil {
 		if err := asyncErrorSender.CloseAndWait(); err != nil {
 			log.Printf("Job %s: Error sender error: %v", j.ID, err)
-			errorSendErr = err
 			// Format error message with details
 			errorMsg := fmt.Sprintf("failed to deliver error batch to %s: %v", j.Delivery.ErrorsEndpoint, err)
 			if httpErr, ok := client.GetHTTPError(err); ok {
@@ -411,8 +409,6 @@ done:
 	if sendErr != nil {
 		store.UpdateError(j.ID, sendErr)
 		store.UpdateStatus(j.ID, job.StatusFailed)
-	} else if errorSendErr != nil {
-		// Error batch delivery error already handled above
 	} else if jobCtx.Err() == context.Canceled {
 		store.UpdateStatus(j.ID, job.StatusCanceled)
 	} else {

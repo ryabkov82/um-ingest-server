@@ -101,9 +101,9 @@ func TestTransformerReturnsMap(t *testing.T) {
 					Source: job.SourceSpec{By: "order", Index: 0},
 				},
 				{
-					Out:    "Date",
-					Type:   "date",
-					Source: job.SourceSpec{By: "order", Index: 1},
+					Out:        "Date",
+					Type:       "date",
+					Source:     job.SourceSpec{By: "order", Index: 1},
 					DateFormat: "DD.MM.YYYY",
 				},
 				{
@@ -155,11 +155,6 @@ func TestTransformerReturnsMap(t *testing.T) {
 		t.Fatal("Result should not be nil")
 	}
 
-	// Check result is a map
-	if result == nil {
-		t.Fatal("Result should not be nil")
-	}
-
 	// Check row number field
 	rowNo, ok := result["НомерСтрокиФайла"].(int)
 	if !ok {
@@ -196,4 +191,3 @@ func TestTransformerReturnsMap(t *testing.T) {
 		t.Errorf("Expected amount 123.45, got %v", amount)
 	}
 }
-
