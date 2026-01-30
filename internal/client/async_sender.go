@@ -74,6 +74,11 @@ func (a *AsyncSender) worker(ctx context.Context) {
 	defer a.wg.Done()
 
 	for batch := range a.q {
+		// Skip nil batches (can happen if channel was closed)
+		if batch == nil {
+			continue
+		}
+
 		// Check if context is already done
 		select {
 		case <-ctx.Done():

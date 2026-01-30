@@ -68,6 +68,11 @@ func (a *AsyncErrorSender) worker(ctx context.Context) {
 	defer a.wg.Done()
 
 	for errorBatch := range a.q {
+		// Skip nil batches (can happen if channel was closed)
+		if errorBatch == nil {
+			continue
+		}
+
 		// Check if context is already done
 		select {
 		case <-ctx.Done():
