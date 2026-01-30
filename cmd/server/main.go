@@ -165,8 +165,11 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 	}
 	defer store.ClearCancel(j.ID)
 
-	// Create timings for metrics collection
-	timings := ingest.NewTimings()
+	// Create timings for metrics collection (only if UM_TIMINGS=1)
+	var timings *ingest.Timings
+	if os.Getenv("UM_TIMINGS") == "1" {
+		timings = ingest.NewTimings()
+	}
 
 	// Create processor
 	processor, err := ingest.NewProcessor(j, store, allowedBaseDir, timings)
@@ -394,8 +397,10 @@ done:
 		store.UpdateErrors(j.ID, processor.GetErrorsTotal(), errorsSent)
 	}
 
-	// Log timings summary
-	log.Printf("Job %s: Timings summary: %s", j.ID, timings.String())
+	// Log timings summary (only if timings are enabled)
+	if timings != nil {
+		log.Printf("Job %s: Timings summary: %s", j.ID, timings.String())
+	}
 
 	// Check final status
 	if sendErr != nil {

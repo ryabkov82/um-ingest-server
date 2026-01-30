@@ -95,6 +95,7 @@ go build -ldflags "\
 - `UM_INGEST_API_KEY` - API ключ для аутентификации (если не задан, auth отключен)
 - `UM_1C_BASIC_USER` - имя пользователя для Basic аутентификации при отправке батчей в 1С (обязательно, если не указан `delivery.auth`)
 - `UM_1C_BASIC_PASS` - пароль для Basic аутентификации при отправке батчей в 1С (обязательно, если не указан `delivery.auth`)
+- `UM_TIMINGS` - включить сбор метрик времени выполнения (опционально, значение: `1`). По умолчанию выключено. Если задан `UM_TIMINGS=1`, сервис собирает метрики по стадиям пайплайна (CSV read, Transform, Batch assembly, JSON marshal, gzip, HTTP) и логирует сводку в конце каждого job.
 - `UM_PPROF_ADDR` - адрес для HTTP сервера pprof (опционально, например: `localhost:6060`). Если задан, запускается HTTP сервер для профилирования производительности. Доступны стандартные endpoints Go pprof: `/debug/pprof/`, `/debug/pprof/profile`, `/debug/pprof/heap` и т.д.
 - `UM_CPU_PROFILE` - путь к файлу для записи CPU профиля (опционально, например: `/tmp/cpu.prof`). Если задан, сервис записывает CPU профиль в указанный файл на время работы процесса. Для анализа используйте `go tool pprof`.
 
@@ -679,7 +680,31 @@ go tool pprof /tmp/cpu.prof
 
 ### Метрики времени выполнения
 
-После завершения каждого job сервис автоматически логирует сводку метрик времени выполнения по стадиям пайплайна:
+**Включение метрик:**
+
+Метрики времени выполнения собираются только если задан env-флаг `UM_TIMINGS=1`:
+
+```bash
+export UM_TIMINGS=1
+./um-ingest-server
+```
+
+По умолчанию метрики выключены для минимизации overhead.
+
+**Пример использования на тесте:**
+
+```bash
+# Включить метрики для анализа производительности
+export UM_TIMINGS=1
+export ALLOWED_BASE_DIR=/tmp
+export UM_1C_BASIC_USER=test_user
+export UM_1C_BASIC_PASS=test_pass
+./um-ingest-server
+# ... создать job через POST /jobs ...
+# В логах будет сводка метрик после завершения job
+```
+
+После завершения каждого job (если `UM_TIMINGS=1`) сервис автоматически логирует сводку метрик времени выполнения по стадиям пайплайна:
 
 ```
 Job abc-123: Timings summary: CSV read: total=2.5s count=1000000 avg=2.5µs; Transform: total=5.2s count=1000000 avg=5.2µs; Batch assembly: total=50ms count=500 avg=100µs; Data marshal: total=200ms count=500 avg=400µs; Data gzip: total=150ms count=500 avg=300µs; Data HTTP: total=10s count=500 avg=20ms; Errors HTTP: total=500ms count=10 avg=50ms
