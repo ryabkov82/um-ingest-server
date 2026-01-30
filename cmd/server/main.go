@@ -125,7 +125,8 @@ func main() {
 	go worker(ctx, store, allowedBaseDir, env1CUser, env1CPass, sendWorkers, sendQueue, errSendWorkers, errSendQueue)
 
 	// Setup HTTP server
-	handler := httpapi.NewHandler(store, allowedBaseDir, env1CUser, env1CPass)
+	// Pass server context to handler (jobs will use this context, not HTTP request context)
+	handler := httpapi.NewHandler(store, allowedBaseDir, env1CUser, env1CPass, ctx)
 	router := httpapi.SetupRouter(handler)
 
 	server := &http.Server{

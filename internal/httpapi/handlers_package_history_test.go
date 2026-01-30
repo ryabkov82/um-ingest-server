@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -21,7 +22,7 @@ func TestGetJobByPackageReturnsActive(t *testing.T) {
 	os.WriteFile(testFile, []byte("test"), 0644)
 
 	store := job.NewStore()
-	handler := NewHandler(store, tmpDir, "test_user", "test_pass")
+	handler := NewHandler(store, tmpDir, "test_user", "test_pass", context.Background())
 
 	// Create a job
 	req := map[string]interface{}{
@@ -88,7 +89,7 @@ func TestGetJobByPackageReturnsLastAfterFinish(t *testing.T) {
 	os.WriteFile(testFile, []byte("test"), 0644)
 
 	store := job.NewStore()
-	handler := NewHandler(store, tmpDir, "test_user", "test_pass")
+	handler := NewHandler(store, tmpDir, "test_user", "test_pass", context.Background())
 
 	// Create a job
 	req := map[string]interface{}{
@@ -163,7 +164,7 @@ func TestGetJobByPackageReturnsLastAfterFinish(t *testing.T) {
 func TestGetJobByPackage404WhenNeverSeen(t *testing.T) {
 	tmpDir := t.TempDir()
 	store := job.NewStore()
-	handler := NewHandler(store, tmpDir, "test_user", "test_pass")
+	handler := NewHandler(store, tmpDir, "test_user", "test_pass", context.Background())
 
 	// Try to get job for packageId that never existed
 	w := httptest.NewRecorder()
@@ -182,7 +183,7 @@ func TestGetJobByPackageReturnsLastFailed(t *testing.T) {
 	os.WriteFile(testFile, []byte("test"), 0644)
 
 	store := job.NewStore()
-	handler := NewHandler(store, tmpDir, "test_user", "test_pass")
+	handler := NewHandler(store, tmpDir, "test_user", "test_pass", context.Background())
 
 	// Create a job
 	req := map[string]interface{}{

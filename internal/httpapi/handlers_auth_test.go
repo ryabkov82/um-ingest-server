@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -25,7 +26,7 @@ func TestCreateJobWithoutDeliveryAuthWithEnv(t *testing.T) {
 	os.WriteFile(testFile, []byte("test"), 0644)
 
 	store := job.NewStore()
-	handler := NewHandler(store, tmpDir, "env_user", "env_pass")
+	handler := NewHandler(store, tmpDir, "env_user", "env_pass", context.Background())
 
 	req := map[string]interface{}{
 		"packageId": "test-pkg-env",
@@ -68,7 +69,7 @@ func TestCreateJobWithoutDeliveryAuthWithoutEnv(t *testing.T) {
 	os.WriteFile(testFile, []byte("test"), 0644)
 
 	store := job.NewStore()
-	handler := NewHandler(store, tmpDir, "", "")
+	handler := NewHandler(store, tmpDir, "", "", context.Background())
 
 	req := map[string]interface{}{
 		"packageId": "test-pkg-no-auth",
@@ -112,7 +113,7 @@ func TestAuthSelectionPrefersPayloadOverEnv(t *testing.T) {
 
 	store := job.NewStore()
 	// Handler has env credentials
-	handler := NewHandler(store, tmpDir, "env_user", "env_pass")
+	handler := NewHandler(store, tmpDir, "env_user", "env_pass", context.Background())
 
 	req := map[string]interface{}{
 		"packageId": "test-pkg-payload",
@@ -176,7 +177,7 @@ func TestNoPasswordLeakInStatus(t *testing.T) {
 	os.WriteFile(testFile, []byte("test"), 0644)
 
 	store := job.NewStore()
-	handler := NewHandler(store, tmpDir, "env_user", "env_pass")
+	handler := NewHandler(store, tmpDir, "env_user", "env_pass", context.Background())
 
 	req := map[string]interface{}{
 		"packageId": "test-pkg-leak",
@@ -264,7 +265,7 @@ func TestEnvAuthUsedWhenNoPayload(t *testing.T) {
 	os.WriteFile(testFile, []byte("test"), 0644)
 
 	store := job.NewStore()
-	handler := NewHandler(store, tmpDir, "env_user", "env_pass")
+	handler := NewHandler(store, tmpDir, "env_user", "env_pass", context.Background())
 
 	req := map[string]interface{}{
 		"packageId": "test-pkg-env-only",

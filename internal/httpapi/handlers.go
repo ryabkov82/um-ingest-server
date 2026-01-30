@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -20,14 +21,23 @@ type Handler struct {
 	allowedBaseDir string
 	env1CUser      string
 	env1CPass      string
+	serverCtx      context.Context // Long-lived server context (not tied to HTTP request)
 }
 
 // NewHandler creates a new handler
-func NewHandler(store *job.Store, allowedBaseDir, env1CUser, env1CPass string) *Handler {
+// serverCtx: long-lived server context (used for job processing, not tied to HTTP request)
+func NewHandler(store *job.Store, allowedBaseDir, env1CUser, env1CPass string, serverCtx context.Context) *Handler {
 	// Ensure allowedBaseDir is absolute
 	absDir, err := filepath.Abs(allowedBaseDir)
 	if err != nil {
 		log.Fatalf("Invalid ALLOWED_BASE_DIR: %v", err)
+	}
+
+	// Use context.Background() if serverCtx is nil (for backward compatibility in tests)
+	// In production, serverCtx should always be provided
+	if serverCtx == nil {
+		serverCtx = context.Background()
+		log.Printf("WARNING: Handler created without serverCtx, using context.Background()")
 	}
 
 	return &Handler{
@@ -35,6 +45,7 @@ func NewHandler(store *job.Store, allowedBaseDir, env1CUser, env1CPass string) *
 		allowedBaseDir: absDir,
 		env1CUser:      env1CUser,
 		env1CPass:      env1CPass,
+		serverCtx:      serverCtx,
 	}
 }
 

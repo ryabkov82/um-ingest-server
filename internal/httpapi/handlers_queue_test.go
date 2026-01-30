@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -18,7 +19,7 @@ func TestCreateJobQueueFull(t *testing.T) {
 	allowedBase := tmpDir + "/incoming"
 	
 	store := job.NewStore()
-	handler := NewHandler(store, allowedBase, "test_user", "test_pass")
+	handler := NewHandler(store, allowedBase, "test_user", "test_pass", context.Background())
 
 	// Create test file
 	testFile := allowedBase + "/test.csv"

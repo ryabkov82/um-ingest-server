@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -11,7 +12,7 @@ import (
 
 func TestGetVersion(t *testing.T) {
 	store := job.NewStore()
-	handler := NewHandler(store, "/tmp", "", "")
+	handler := NewHandler(store, "/tmp", "", "", context.Background())
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/version", nil)
@@ -51,7 +52,7 @@ func TestGetVersion(t *testing.T) {
 
 func TestGetVersionMethodNotAllowed(t *testing.T) {
 	store := job.NewStore()
-	handler := NewHandler(store, "/tmp", "", "")
+	handler := NewHandler(store, "/tmp", "", "", context.Background())
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", "/version", nil)

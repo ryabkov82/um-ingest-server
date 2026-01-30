@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -19,7 +20,7 @@ func TestCreateJobDuplicatePackageId(t *testing.T) {
 	os.WriteFile(testFile, []byte("test"), 0644)
 
 	store := job.NewStore()
-	handler := NewHandler(store, tmpDir, "test_user", "test_pass")
+	handler := NewHandler(store, tmpDir, "test_user", "test_pass", context.Background())
 
 	// Create first job
 	req1 := map[string]interface{}{
@@ -82,7 +83,7 @@ func TestGetJobByPackage(t *testing.T) {
 	os.WriteFile(testFile, []byte("test"), 0644)
 
 	store := job.NewStore()
-	handler := NewHandler(store, tmpDir, "test_user", "test_pass")
+	handler := NewHandler(store, tmpDir, "test_user", "test_pass", context.Background())
 
 	// Create a job
 	req := map[string]interface{}{
@@ -161,7 +162,7 @@ func TestCancelJobByPackage(t *testing.T) {
 	os.WriteFile(testFile, []byte("test"), 0644)
 
 	store := job.NewStore()
-	handler := NewHandler(store, tmpDir, "test_user", "test_pass")
+	handler := NewHandler(store, tmpDir, "test_user", "test_pass", context.Background())
 
 	// Create a job
 	req := map[string]interface{}{
@@ -240,7 +241,7 @@ func TestCreateJobWithoutPackageId(t *testing.T) {
 	os.WriteFile(testFile, []byte("test"), 0644)
 
 	store := job.NewStore()
-	handler := NewHandler(store, tmpDir, "test_user", "test_pass")
+	handler := NewHandler(store, tmpDir, "test_user", "test_pass", context.Background())
 
 	req := map[string]interface{}{
 		"inputPath": testFile,
