@@ -180,8 +180,8 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 		return
 	}
 
-	// Create sender for data batches
-	sender := client.NewSender(
+	// Create base sender for data batches
+	dataBaseSender := client.NewSender(
 		j.Delivery.Endpoint,
 		j.Delivery.Gzip,
 		j.Delivery.TimeoutSeconds,
@@ -195,10 +195,26 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 		false, // isErrors = false for data endpoint
 	)
 
-	// Create error sender if errorsEndpoint is configured
-	var errorSender *client.Sender
+	// Create async sender for data batches with callback to track progress
+	var rowsSent, batchesSent, errorsSent int64
+	asyncDataSender := client.NewAsyncSender(
+		dataBaseSender,
+		8, // queueSize
+		jobCancel,
+		func(batch *ingest.Batch) {
+			// Callback after successful batch send
+			rowsSent += int64(len(batch.Rows))
+			batchesSent++
+			store.UpdateSendProgress(j.ID, rowsSent, batchesSent)
+			log.Printf("Job %s: Batch %d sent successfully (%d rows)", j.ID, batch.BatchNo, len(batch.Rows))
+		},
+	)
+	asyncDataSender.Start(jobCtx, 1) // workers=1 to maintain order
+
+	// Create async error sender if errorsEndpoint is configured
+	var asyncErrorSender *client.AsyncErrorSender
 	if j.Delivery.ErrorsEndpoint != "" {
-		errorSender = client.NewSender(
+		errorBaseSender := client.NewSender(
 			j.Delivery.ErrorsEndpoint,
 			j.Delivery.Gzip,
 			j.Delivery.TimeoutSeconds,
@@ -211,6 +227,18 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 			timings,
 			true, // isErrors = true for errors endpoint
 		)
+		asyncErrorSender = client.NewAsyncErrorSender(
+			errorBaseSender,
+			8, // queueSize
+			jobCancel,
+			func(errorBatch *ingest.ErrorBatch) {
+				// Callback after successful error batch send
+				errorsSent += int64(len(errorBatch.Errors))
+				store.UpdateErrors(j.ID, processor.GetErrorsTotal(), errorsSent)
+				log.Printf("Job %s: Error batch %d sent successfully (%d errors)", j.ID, errorBatch.BatchNo, len(errorBatch.Errors))
+			},
+		)
+		asyncErrorSender.Start(jobCtx, 1) // workers=1 to maintain order
 	}
 
 	// Start processing (parser goroutine)
@@ -219,11 +247,9 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 		processErrChan <- processor.Process(jobCtx)
 	}()
 
-	// Send batches and track progress
+	// Send batches and track progress using async senders
 	batchChan := processor.GetBatchChan()
 	errorChan := processor.GetErrorChan()
-	var sendErr error
-	var rowsSent, batchesSent, errorsSent int64
 	batchChanClosed := false
 	errorChanClosed := false
 
@@ -236,33 +262,29 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 		case batch, ok := <-batchChan:
 			if !ok {
 				batchChanClosed = true
-				if errorChanClosed || errorSender == nil {
+				if errorChanClosed || asyncErrorSender == nil {
 					goto done
 				}
 				continue
 			}
 
-			// Send batch
-			if err := sender.SendBatch(jobCtx, batch); err != nil {
-				log.Printf("Job %s: Batch %d send error: %v", j.ID, batch.BatchNo, err)
-				sendErr = err
-				// Check if error is fatal (4xx except 429)
-				if httpErr, ok := client.GetHTTPError(err); ok {
-					if httpErr.StatusCode >= 400 && httpErr.StatusCode < 500 && httpErr.StatusCode != 429 {
-						// Fatal error, cancel processing
-						jobCancel()
-						store.UpdateError(j.ID, err)
-						store.UpdateStatus(j.ID, job.StatusFailed)
-						return
+			// Enqueue batch for async sending
+			if err := asyncDataSender.Enqueue(jobCtx, batch); err != nil {
+				log.Printf("Job %s: Batch %d enqueue error: %v", j.ID, batch.BatchNo, err)
+				// If enqueue failed due to fatal error, job will be canceled by async sender
+				if err != context.Canceled {
+					// Check if error is fatal (4xx except 429)
+					if httpErr, ok := client.GetHTTPError(err); ok {
+						if httpErr.StatusCode >= 400 && httpErr.StatusCode < 500 && httpErr.StatusCode != 429 {
+							// Fatal error, cancel processing
+							jobCancel()
+							store.UpdateError(j.ID, err)
+							store.UpdateStatus(j.ID, job.StatusFailed)
+							return
+						}
 					}
 				}
-				// Retryable error, continue (don't count as sent)
-			} else {
-				// Successfully sent - update sending progress
-				rowsSent += int64(len(batch.Rows))
-				batchesSent++
-				store.UpdateSendProgress(j.ID, rowsSent, batchesSent)
-				log.Printf("Job %s: Batch %d sent successfully (%d rows)", j.ID, batch.BatchNo, len(batch.Rows))
+				// Context canceled or retryable error, continue
 			}
 
 		case errorBatch, ok := <-errorChan:
@@ -274,11 +296,10 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 				continue
 			}
 
-			// Send error batch (required if errorsEndpoint is configured)
-			if errorSender != nil {
-
+			// Enqueue error batch for async sending (required if errorsEndpoint is configured)
+			if asyncErrorSender != nil {
 				if errorBatch == nil || len(errorBatch.Errors) == 0 {
-					// optional log
+					// Skip empty error batches
 					continue
 				}
 
@@ -297,27 +318,17 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 					)
 				}
 
-				if err := errorSender.SendErrorBatch(jobCtx, errorBatch); err != nil {
-					log.Printf("Job %s: Error batch %d send error: %v", j.ID, errorBatch.BatchNo, err)
-					// Fail job if error batch delivery fails (errorsEndpoint is configured)
-					// Format error message with details
-					errorMsg := fmt.Sprintf("failed to deliver error batch %d to %s: %v", errorBatch.BatchNo, j.Delivery.ErrorsEndpoint, err)
-					if httpErr, ok := client.GetHTTPError(err); ok {
-						bodySnippet := httpErr.Body
-						if len(bodySnippet) > 200 {
-							bodySnippet = bodySnippet[:200] + "..."
-						}
-						errorMsg = fmt.Sprintf("failed to deliver error batch %d to %s: HTTP %d: %s", errorBatch.BatchNo, j.Delivery.ErrorsEndpoint, httpErr.StatusCode, bodySnippet)
+				if err := asyncErrorSender.Enqueue(jobCtx, errorBatch); err != nil {
+					log.Printf("Job %s: Error batch %d enqueue error: %v", j.ID, errorBatch.BatchNo, err)
+					// If enqueue failed, error batch delivery will fail job (handled in CloseAndWait)
+					if err != context.Canceled {
+						// Format error message with details
+						errorMsg := fmt.Sprintf("failed to enqueue error batch %d: %v", errorBatch.BatchNo, err)
+						store.UpdateErrors(j.ID, processor.GetErrorsTotal(), errorsSent)
+						store.UpdateError(j.ID, fmt.Errorf(errorMsg))
+						store.UpdateStatus(j.ID, job.StatusFailed)
+						return
 					}
-					// Best-effort: persist current error counters before failing
-					store.UpdateErrors(j.ID, processor.GetErrorsTotal(), errorsSent)
-					store.UpdateError(j.ID, fmt.Errorf(errorMsg))
-					store.UpdateStatus(j.ID, job.StatusFailed)
-					return
-				} else {
-					errorsSent += int64(len(errorBatch.Errors))
-					store.UpdateErrors(j.ID, processor.GetErrorsTotal(), errorsSent)
-					log.Printf("Job %s: Error batch %d sent successfully (%d errors)", j.ID, errorBatch.BatchNo, len(errorBatch.Errors))
 				}
 			}
 
@@ -330,70 +341,39 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 			}
 			// Processing done, continue to process remaining batches and errors
 		}
-
-		// Check if both channels are closed
-		if batchChanClosed && (errorChanClosed || errorSender == nil) {
-			goto done
-		}
 	}
 
 done:
-	// Wait for any remaining batches
-	if !batchChanClosed {
-		for batch := range batchChan {
-			if err := sender.SendBatch(jobCtx, batch); err != nil {
-				log.Printf("Job %s: Final batch %d send error: %v", j.ID, batch.BatchNo, err)
-				sendErr = err
-			} else {
-				// Successfully sent
-				rowsSent += int64(len(batch.Rows))
-				batchesSent++
-				store.UpdateSendProgress(j.ID, rowsSent, batchesSent)
-			}
-		}
+	// Wait for all async senders to finish and check for errors
+	var sendErr error
+	if err := asyncDataSender.CloseAndWait(); err != nil {
+		log.Printf("Job %s: Data sender error: %v", j.ID, err)
+		sendErr = err
 	}
 
-	// Wait for any remaining error batches (required if errorsEndpoint is configured)
-	if errorSender != nil && !errorChanClosed {
-		for errorBatch := range errorChan {
-			// Skip empty error batches
-			if len(errorBatch.Errors) == 0 {
-				log.Printf("Job %s: Skipping empty final error batch %d", j.ID, errorBatch.BatchNo)
-				continue
-			}
-
-			if err := errorSender.SendErrorBatch(jobCtx, errorBatch); err != nil {
-				log.Printf("Job %s: Final error batch %d send error: %v", j.ID, errorBatch.BatchNo, err)
-				// Fail job if error batch delivery fails (errorsEndpoint is configured)
-				errorMsg := fmt.Sprintf("failed to deliver error batch %d to %s: %v", errorBatch.BatchNo, j.Delivery.ErrorsEndpoint, err)
-				if httpErr, ok := client.GetHTTPError(err); ok {
-					bodySnippet := httpErr.Body
-					if len(bodySnippet) > 200 {
-						bodySnippet = bodySnippet[:200] + "..."
-					}
-					errorMsg = fmt.Sprintf("failed to deliver error batch %d to %s: HTTP %d: %s", errorBatch.BatchNo, j.Delivery.ErrorsEndpoint, httpErr.StatusCode, bodySnippet)
+	var errorSendErr error
+	if asyncErrorSender != nil {
+		if err := asyncErrorSender.CloseAndWait(); err != nil {
+			log.Printf("Job %s: Error sender error: %v", j.ID, err)
+			errorSendErr = err
+			// Format error message with details
+			errorMsg := fmt.Sprintf("failed to deliver error batch to %s: %v", j.Delivery.ErrorsEndpoint, err)
+			if httpErr, ok := client.GetHTTPError(err); ok {
+				bodySnippet := httpErr.Body
+				if len(bodySnippet) > 200 {
+					bodySnippet = bodySnippet[:200] + "..."
 				}
-				store.UpdateError(j.ID, fmt.Errorf(errorMsg))
-				store.UpdateStatus(j.ID, job.StatusFailed)
-				return
-			} else {
-				errorsSent += int64(len(errorBatch.Errors))
-				store.UpdateErrors(j.ID, processor.GetErrorsTotal(), errorsSent)
+				errorMsg = fmt.Sprintf("failed to deliver error batch to %s: HTTP %d: %s", j.Delivery.ErrorsEndpoint, httpErr.StatusCode, bodySnippet)
 			}
+			store.UpdateErrors(j.ID, processor.GetErrorsTotal(), errorsSent)
+			store.UpdateError(j.ID, fmt.Errorf(errorMsg))
+			store.UpdateStatus(j.ID, job.StatusFailed)
+			return
 		}
-	}
-
-	// Final check: flush any remaining errors in buffer (only if errorsEndpoint is configured)
-	// This will only send if there are actual errors in the buffer
-	if errorSender != nil {
-		// Wait a bit to ensure processor has flushed its buffer
-		// The processor will flush remaining errors in parseAndBatch before closing errorChan
-		// So by the time we get here, all errors should have been sent via errorChan
-		// But we don't need to do anything here - errors are sent via errorChan
 	}
 
 	// Final error count update
-	if errorSender != nil {
+	if asyncErrorSender != nil {
 		store.UpdateErrors(j.ID, processor.GetErrorsTotal(), errorsSent)
 	}
 
@@ -406,6 +386,8 @@ done:
 	if sendErr != nil {
 		store.UpdateError(j.ID, sendErr)
 		store.UpdateStatus(j.ID, job.StatusFailed)
+	} else if errorSendErr != nil {
+		// Error batch delivery error already handled above
 	} else if jobCtx.Err() == context.Canceled {
 		store.UpdateStatus(j.ID, job.StatusCanceled)
 	} else {
