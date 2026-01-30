@@ -186,6 +186,7 @@ func (s *Sender) sendBatchOnce(ctx context.Context, batch *ingest.Batch) error {
 	}
 
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
 	if contentEncoding != "" {
 		req.Header.Set("Content-Encoding", contentEncoding)
 	}
@@ -378,6 +379,7 @@ func (s *Sender) sendErrorBatchOnce(ctx context.Context, errorBatch *ingest.Erro
 	}
 
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
 	if contentEncoding != "" {
 		req.Header.Set("Content-Encoding", contentEncoding)
 	}

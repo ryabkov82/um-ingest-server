@@ -579,7 +579,13 @@ done:
 		store.UpdateError(j.ID, sendErr)
 		store.UpdateStatus(j.ID, job.StatusFailed)
 	} else if jobCtx.Err() == context.Canceled {
-		store.UpdateStatus(j.ID, job.StatusCanceled)
+		// If canceled but has lastError, treat as failed (fatal sender error)
+		finalJob, _ := store.Get(j.ID)
+		if finalJob != nil && finalJob.LastError != "" {
+			store.UpdateStatus(j.ID, job.StatusFailed)
+		} else {
+			store.UpdateStatus(j.ID, job.StatusCanceled)
+		}
 	} else {
 		log.Printf("Job %s: Completed successfully", j.ID)
 		store.UpdateStatus(j.ID, job.StatusSucceeded)
