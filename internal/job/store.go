@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
+	"runtime"
 	"sync"
 	"time"
 
@@ -213,12 +215,13 @@ func (s *Store) SetCancel(jobID string, cf context.CancelFunc) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	_, ok := s.jobs[jobID]
+	j, ok := s.jobs[jobID]
 	if !ok {
 		return fmt.Errorf("job not found: %s", jobID)
 	}
 
 	s.cancels[jobID] = cf
+	log.Printf("Job %s: Cancel function registered (package=%s status=%s)", jobID, j.PackageID, j.Status)
 	return nil
 }
 
@@ -227,14 +230,31 @@ func (s *Store) ClearCancel(jobID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	j, ok := s.jobs[jobID]
+	if ok {
+		log.Printf("Job %s: Cancel function cleared (package=%s status=%s)", jobID, j.PackageID, j.Status)
+	}
 	delete(s.cancels, jobID)
 }
 
 // Cancel cancels a job
 func (s *Store) Cancel(id string) error {
-	var cf context.CancelFunc
+	// Get caller information for logging
+	pc, file, line, ok := runtime.Caller(1)
+	callerInfo := "unknown"
+	if ok {
+		fn := runtime.FuncForPC(pc)
+		if fn != nil {
+			callerInfo = fmt.Sprintf("%s:%d %s", file, line, fn.Name())
+		} else {
+			callerInfo = fmt.Sprintf("%s:%d", file, line)
+		}
+	}
 
 	s.mu.Lock()
+
+	var cf context.CancelFunc
+
 	j, ok := s.jobs[id]
 	if !ok {
 		s.mu.Unlock()
@@ -251,6 +271,7 @@ func (s *Store) Cancel(id string) error {
 		cf = cancelFunc
 	}
 
+	oldStatus := j.Status
 	j.Status = StatusCanceled
 	now := time.Now()
 	j.FinishedAt = &now
@@ -266,6 +287,9 @@ func (s *Store) Cancel(id string) error {
 	}
 
 	s.mu.Unlock()
+
+	// Log cancel with caller information
+	log.Printf("Job %s canceled (package=%s oldStatus=%s caller=%s)", id, j.PackageID, oldStatus, callerInfo)
 
 	// Call cancel function outside of lock
 	if cf != nil {

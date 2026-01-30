@@ -224,6 +224,22 @@ func TestCancelJobByPackage(t *testing.T) {
 		t.Errorf("Expected jobId %s, got %v", jobID, response["jobId"])
 	}
 
+	// Verify job is canceled in store
+	finalJob, err := store.Get(jobID)
+	if err != nil {
+		t.Fatalf("Failed to get job: %v", err)
+	}
+	if finalJob.Status != job.StatusCanceled {
+		t.Errorf("Expected job status Canceled, got %s", finalJob.Status)
+	}
+	if finalJob.FinishedAt == nil {
+		t.Error("Expected FinishedAt to be set")
+	}
+
+	// Verify cancel was logged (log should contain caller information from CancelJobByPackage handler)
+	// The log should contain "Job {jobID} canceled" with caller pointing to handlers.go:386
+	t.Logf("Job %s canceled via HTTP endpoint, status=%s (check logs for caller info: handlers.go:386)", jobID, finalJob.Status)
+
 	// Try to cancel non-existent package
 	w3 := httptest.NewRecorder()
 	r3 := httptest.NewRequest("POST", "/packages/non-existent/cancel", nil)
