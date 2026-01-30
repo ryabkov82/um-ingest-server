@@ -29,6 +29,8 @@ type Timings struct {
 	DataGzipCount    int64
 	DataHTTPTotal    time.Duration
 	DataHTTPCount    int64
+	DataAttempts     int64 // Total attempts (including retries)
+	DataRetries      int64 // Total retries (attempts > 1)
 
 	// Sender metrics (errors endpoint)
 	ErrorsMarshalTotal time.Duration
@@ -37,6 +39,8 @@ type Timings struct {
 	ErrorsGzipCount    int64
 	ErrorsHTTPTotal    time.Duration
 	ErrorsHTTPCount    int64
+	ErrorsAttempts     int64 // Total attempts (including retries)
+	ErrorsRetries      int64 // Total retries (attempts > 1)
 }
 
 // NewTimings creates a new Timings instance
@@ -116,6 +120,46 @@ func (t *Timings) ObserveErrorsHTTP(duration time.Duration) {
 	t.ErrorsHTTPCount++
 }
 
+// IncDataAttempt increments the data attempts counter
+func (t *Timings) IncDataAttempt() {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.DataAttempts++
+}
+
+// IncDataRetry increments the data retries counter
+func (t *Timings) IncDataRetry() {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.DataRetries++
+}
+
+// IncErrorsAttempt increments the errors attempts counter
+func (t *Timings) IncErrorsAttempt() {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.ErrorsAttempts++
+}
+
+// IncErrorsRetry increments the errors retries counter
+func (t *Timings) IncErrorsRetry() {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.ErrorsRetries++
+}
+
 // String returns a formatted summary of all timings
 func (t *Timings) String() string {
 	t.mu.Lock()
@@ -167,6 +211,14 @@ func (t *Timings) String() string {
 	if t.ErrorsHTTPCount > 0 {
 		avg := t.ErrorsHTTPTotal / time.Duration(t.ErrorsHTTPCount)
 		result += fmt.Sprintf("Errors HTTP: total=%v count=%d avg=%v; ", t.ErrorsHTTPTotal, t.ErrorsHTTPCount, avg)
+	}
+
+	// Retry counters
+	if t.DataAttempts > 0 {
+		result += fmt.Sprintf("Data attempts: %d retries: %d; ", t.DataAttempts, t.DataRetries)
+	}
+	if t.ErrorsAttempts > 0 {
+		result += fmt.Sprintf("Errors attempts: %d retries: %d; ", t.ErrorsAttempts, t.ErrorsRetries)
 	}
 
 	if result == "" {

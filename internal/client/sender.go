@@ -85,7 +85,24 @@ func (s *Sender) SendBatch(ctx context.Context, batch *ingest.Batch) error {
 	var lastErr error
 
 	for attempt := 0; attempt <= s.maxRetries; attempt++ {
+		// Increment attempts counter
+		if s.timings != nil {
+			if s.isErrors {
+				s.timings.IncErrorsAttempt()
+			} else {
+				s.timings.IncDataAttempt()
+			}
+		}
+
 		if attempt > 0 {
+			// Increment retries counter
+			if s.timings != nil {
+				if s.isErrors {
+					s.timings.IncErrorsRetry()
+				} else {
+					s.timings.IncDataRetry()
+				}
+			}
 			// Calculate backoff
 			backoff := time.Duration(s.backoffMs) * time.Duration(1<<uint(attempt-1)) * time.Millisecond
 			if backoff > time.Duration(s.backoffMaxMs)*time.Millisecond {
@@ -275,7 +292,17 @@ func (s *Sender) SendErrorBatch(ctx context.Context, errorBatch *ingest.ErrorBat
 	var lastErr error
 
 	for attempt := 0; attempt <= s.maxRetries; attempt++ {
+		// Increment attempts counter
+		if s.timings != nil {
+			s.timings.IncErrorsAttempt()
+		}
+
 		if attempt > 0 {
+			// Increment retries counter
+			if s.timings != nil {
+				s.timings.IncErrorsRetry()
+			}
+
 			// Calculate backoff
 			backoff := time.Duration(s.backoffMs) * time.Duration(1<<uint(attempt-1)) * time.Millisecond
 			if backoff > time.Duration(s.backoffMaxMs)*time.Millisecond {

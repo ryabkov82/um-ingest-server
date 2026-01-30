@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime/pprof"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -72,6 +73,24 @@ func main() {
 		}()
 	}
 
+	// Helper function to parse int env with validation
+	parseIntEnv := func(key string, defaultValue, min, max int) int {
+		valStr := os.Getenv(key)
+		if valStr == "" {
+			return defaultValue
+		}
+		val, err := strconv.Atoi(valStr)
+		if err != nil {
+			log.Printf("WARNING: Invalid %s value '%s', using default %d", key, valStr, defaultValue)
+			return defaultValue
+		}
+		if val < min || val > max {
+			log.Printf("WARNING: %s value %d out of range [%d, %d], using default %d", key, val, min, max, defaultValue)
+			return defaultValue
+		}
+		return val
+	}
+
 	// Get configuration from environment
 	allowedBaseDir := os.Getenv("ALLOWED_BASE_DIR")
 	if allowedBaseDir == "" {
@@ -88,6 +107,12 @@ func main() {
 	env1CUser := os.Getenv("UM_1C_BASIC_USER")
 	env1CPass := os.Getenv("UM_1C_BASIC_PASS")
 
+	// Parse async sender configuration
+	sendWorkers := parseIntEnv("UM_SEND_WORKERS", 1, 1, 16)
+	sendQueue := parseIntEnv("UM_SEND_QUEUE", 8, 1, 1024)
+	errSendWorkers := parseIntEnv("UM_ERR_SEND_WORKERS", sendWorkers, 1, 16)
+	errSendQueue := parseIntEnv("UM_ERR_SEND_QUEUE", sendQueue, 1, 1024)
+
 	// Create job store
 	store := job.NewStore()
 
@@ -95,7 +120,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go worker(ctx, store, allowedBaseDir, env1CUser, env1CPass)
+	go worker(ctx, store, allowedBaseDir, env1CUser, env1CPass, sendWorkers, sendQueue, errSendWorkers, errSendQueue)
 
 	// Setup HTTP server
 	handler := httpapi.NewHandler(store, allowedBaseDir, env1CUser, env1CPass)
@@ -133,7 +158,7 @@ func main() {
 }
 
 // worker processes jobs from the queue (synchronously, one at a time)
-func worker(ctx context.Context, store *job.Store, allowedBaseDir, env1CUser, env1CPass string) {
+func worker(ctx context.Context, store *job.Store, allowedBaseDir, env1CUser, env1CPass string, sendWorkers, sendQueue, errSendWorkers, errSendQueue int) {
 	for {
 		// Get next job (blocking)
 		j, err := store.NextJob(ctx)
@@ -147,12 +172,12 @@ func worker(ctx context.Context, store *job.Store, allowedBaseDir, env1CUser, en
 		}
 
 		// Process job synchronously (no goroutine)
-		processJob(ctx, j, store, allowedBaseDir, env1CUser, env1CPass)
+		processJob(ctx, j, store, allowedBaseDir, env1CUser, env1CPass, sendWorkers, sendQueue, errSendWorkers, errSendQueue)
 	}
 }
 
 // processJob processes a single job
-func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDir, env1CUser, env1CPass string) {
+func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDir, env1CUser, env1CPass string, sendWorkers, sendQueue, errSendWorkers, errSendQueue int) {
 	debugErrors := os.Getenv("UM_DEBUG_ERRORS") == "1"
 
 	// Create cancel context for this job from parent context
@@ -199,7 +224,7 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 	var rowsSent, batchesSent, errorsSent int64
 	asyncDataSender := client.NewAsyncSender(
 		dataBaseSender,
-		8, // queueSize
+		sendQueue,
 		jobCancel,
 		func(batch *ingest.Batch) {
 			// Callback after successful batch send
@@ -209,7 +234,7 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 			log.Printf("Job %s: Batch %d sent successfully (%d rows)", j.ID, batch.BatchNo, len(batch.Rows))
 		},
 	)
-	asyncDataSender.Start(jobCtx, 1) // workers=1 to maintain order
+	asyncDataSender.Start(jobCtx, sendWorkers)
 
 	// Create async error sender if errorsEndpoint is configured
 	var asyncErrorSender *client.AsyncErrorSender
@@ -229,7 +254,7 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 		)
 		asyncErrorSender = client.NewAsyncErrorSender(
 			errorBaseSender,
-			8, // queueSize
+			errSendQueue,
 			jobCancel,
 			func(errorBatch *ingest.ErrorBatch) {
 				// Callback after successful error batch send
@@ -238,7 +263,7 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 				log.Printf("Job %s: Error batch %d sent successfully (%d errors)", j.ID, errorBatch.BatchNo, len(errorBatch.Errors))
 			},
 		)
-		asyncErrorSender.Start(jobCtx, 1) // workers=1 to maintain order
+		asyncErrorSender.Start(jobCtx, errSendWorkers)
 	}
 
 	// Start processing (parser goroutine)

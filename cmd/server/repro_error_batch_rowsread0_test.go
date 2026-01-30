@@ -98,7 +98,7 @@ func TestRepro_ErrorBatchCanFailJobWhileStoreStillShowsZeroCounters(t *testing.T
 	}
 	j.ID = id
 
-	processJob(context.Background(), j, store, tmpDir, "", "")
+	processJob(context.Background(), j, store, tmpDir, "", "", 1, 8, 1, 8)
 
 	gotJob, _ := store.Get(id)
 
