@@ -94,7 +94,7 @@ func TestErrorCounting(t *testing.T) {
 	}
 	j.ID = jobID
 
-	processor, err := NewProcessor(j, store, "/tmp")
+	processor, err := NewProcessor(j, store, "/tmp", nil)
 	if err != nil {
 		t.Fatalf("NewProcessor() error = %v", err)
 	}

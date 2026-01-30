@@ -28,7 +28,7 @@ func TestRetryAndBackoff(t *testing.T) {
 	}))
 	defer server.Close()
 
-	sender := NewSender(server.URL, false, 5, 3, 100, 1000, nil, "", "")
+	sender := NewSender(server.URL, false, 5, 3, 100, 1000, nil, "", "", nil, false)
 
 	batch := &ingest.Batch{
 		PackageID: "test",
@@ -70,7 +70,7 @@ func TestRetryAfterHeader(t *testing.T) {
 	}))
 	defer server.Close()
 
-	sender := NewSender(server.URL, false, 5, 3, 10, 1000, nil, "", "")
+	sender := NewSender(server.URL, false, 5, 3, 10, 1000, nil, "", "", nil, false)
 
 	batch := &ingest.Batch{
 		PackageID: "test",
@@ -101,7 +101,7 @@ func TestFatalError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	sender := NewSender(server.URL, false, 5, 3, 100, 1000, nil, "", "")
+	sender := NewSender(server.URL, false, 5, 3, 100, 1000, nil, "", "", nil, false)
 
 	batch := &ingest.Batch{
 		PackageID: "test",
@@ -146,7 +146,7 @@ func TestGzip(t *testing.T) {
 	}))
 	defer server.Close()
 
-	sender := NewSender(server.URL, true, 5, 0, 100, 1000, nil, "", "")
+	sender := NewSender(server.URL, true, 5, 0, 100, 1000, nil, "", "", nil, false)
 
 	batch := &ingest.Batch{
 		PackageID: "test",
@@ -185,7 +185,7 @@ func TestBasicAuth(t *testing.T) {
 		User: "testuser",
 		Pass: "testpass",
 	}
-	sender := NewSender(server.URL, false, 5, 0, 100, 1000, auth, "", "")
+	sender := NewSender(server.URL, false, 5, 0, 100, 1000, auth, "", "", nil, false)
 
 	batch := &ingest.Batch{
 		PackageID: "test",

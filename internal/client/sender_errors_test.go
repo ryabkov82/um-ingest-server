@@ -42,7 +42,7 @@ func TestErrorBatchHeaders(t *testing.T) {
 		},
 	}
 
-	sender := NewSender(server.URL, false, 5, 3, 100, 1000, nil, "", "")
+	sender := NewSender(server.URL, false, 5, 3, 100, 1000, nil, "", "", nil, false)
 	ctx := context.Background()
 
 	err := sender.SendErrorBatch(ctx, errorBatch)
@@ -81,7 +81,7 @@ func TestErrorBatch401NoRetry(t *testing.T) {
 		Errors:    []ingest.ErrorItem{{RowNo: 1, Code: "TestError"}},
 	}
 
-	sender := NewSender(server.URL, false, 1, 3, 10, 100, nil, "", "")
+	sender := NewSender(server.URL, false, 1, 3, 10, 100, nil, "", "", nil, false)
 	ctx := context.Background()
 
 	err := sender.SendErrorBatch(ctx, errorBatch)
@@ -120,7 +120,7 @@ func TestErrorBatch503RetryThenSuccess(t *testing.T) {
 		Errors:    []ingest.ErrorItem{{RowNo: 1, Code: "TestError"}},
 	}
 
-	sender := NewSender(server.URL, false, 1, 5, 10, 100, nil, "", "")
+	sender := NewSender(server.URL, false, 1, 5, 10, 100, nil, "", "", nil, false)
 	ctx := context.Background()
 
 	err := sender.SendErrorBatch(ctx, errorBatch)
@@ -148,7 +148,7 @@ func TestErrorBatch503AlwaysFail(t *testing.T) {
 	}
 
 	maxRetries := 3
-	sender := NewSender(server.URL, false, 1, maxRetries, 10, 100, nil, "", "")
+	sender := NewSender(server.URL, false, 1, maxRetries, 10, 100, nil, "", "", nil, false)
 	ctx := context.Background()
 
 	err := sender.SendErrorBatch(ctx, errorBatch)
@@ -186,7 +186,7 @@ func TestErrorBatch409Success(t *testing.T) {
 		Errors:    []ingest.ErrorItem{{RowNo: 1, Code: "TestError"}},
 	}
 
-	sender := NewSender(server.URL, false, 1, 3, 10, 100, nil, "", "")
+	sender := NewSender(server.URL, false, 1, 3, 10, 100, nil, "", "", nil, false)
 	ctx := context.Background()
 
 	err := sender.SendErrorBatch(ctx, errorBatch)
@@ -214,7 +214,7 @@ func TestNoEmptyErrorBatchSent(t *testing.T) {
 		Errors:    []ingest.ErrorItem{}, // Empty
 	}
 
-	sender := NewSender(server.URL, false, 1, 3, 10, 100, nil, "", "")
+	sender := NewSender(server.URL, false, 1, 3, 10, 100, nil, "", "", nil, false)
 	ctx := context.Background()
 
 	err := sender.SendErrorBatch(ctx, errorBatch)
@@ -236,7 +236,7 @@ func TestNoEmptyErrorBatchSentNil(t *testing.T) {
 	}))
 	defer server.Close()
 
-	sender := NewSender(server.URL, false, 1, 3, 10, 100, nil, "", "")
+	sender := NewSender(server.URL, false, 1, 3, 10, 100, nil, "", "", nil, false)
 	ctx := context.Background()
 
 	err := sender.SendErrorBatch(ctx, nil)

@@ -13,10 +13,12 @@ import (
 type Transformer struct {
 	job     *job.Job
 	indexes []int // Precomputed field indexes
+	timings *Timings // Optional timings for metrics
 }
 
 // NewTransformer creates a new transformer with precomputed field indexes
-func NewTransformer(j *job.Job, parser *Parser) (*Transformer, error) {
+// If timings is nil, metrics collection is disabled
+func NewTransformer(j *job.Job, parser *Parser, timings *Timings) (*Transformer, error) {
 	indexes := make([]int, len(j.Schema.Fields))
 	for i, field := range j.Schema.Fields {
 		idx, err := parser.GetFieldIndex(field)
@@ -29,6 +31,7 @@ func NewTransformer(j *job.Job, parser *Parser) (*Transformer, error) {
 	return &Transformer{
 		job:     j,
 		indexes: indexes,
+		timings: timings,
 	}, nil
 }
 
@@ -37,6 +40,13 @@ func NewTransformer(j *job.Job, parser *Parser) (*Transformer, error) {
 // Row-level errors (required, type conversion, maxLen, index out of range) do NOT prevent
 // the row from being returned - they are collected in the errors slice.
 func (t *Transformer) TransformRow(parser *Parser, row []string) (map[string]interface{}, []error) {
+	start := time.Now()
+	defer func() {
+		if t.timings != nil {
+			t.timings.ObserveTransform(time.Since(start))
+		}
+	}()
+	
 	result := make(map[string]interface{}, len(t.job.Schema.Fields)+1)
 	var fieldErrors []error
 

@@ -21,7 +21,7 @@ func TestBatchHeaders(t *testing.T) {
 	}))
 	defer server.Close()
 
-	sender := NewSender(server.URL, false, 5, 0, 100, 1000, nil, "", "")
+	sender := NewSender(server.URL, false, 5, 0, 100, 1000, nil, "", "", nil, false)
 
 	batch := &ingest.Batch{
 		PackageID: "test-package-123",
@@ -74,7 +74,7 @@ func TestBatchHeadersOnRetry(t *testing.T) {
 	}))
 	defer server.Close()
 
-	sender := NewSender(server.URL, false, 5, 3, 10, 1000, nil, "", "")
+	sender := NewSender(server.URL, false, 5, 3, 10, 1000, nil, "", "", nil, false)
 
 	batch := &ingest.Batch{
 		PackageID: "retry-package",

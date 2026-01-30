@@ -68,7 +68,7 @@ func TestEnvAuthUsedWhenNoPayload(t *testing.T) {
 	defer server.Close()
 
 	// Create sender with env credentials but no job auth
-	sender := NewSender(server.URL, false, 5, 0, 100, 1000, nil, "env_user", "env_pass")
+	sender := NewSender(server.URL, false, 5, 0, 100, 1000, nil, "env_user", "env_pass", nil, false)
 
 	batch := &ingest.Batch{
 		PackageID: "test-package",
@@ -110,7 +110,7 @@ func TestPayloadAuthOverridesEnv(t *testing.T) {
 	}
 
 	// Create sender with both job auth and env credentials
-	sender := NewSender(server.URL, false, 5, 0, 100, 1000, jobAuth, "env_user", "env_pass")
+	sender := NewSender(server.URL, false, 5, 0, 100, 1000, jobAuth, "env_user", "env_pass", nil, false)
 
 	batch := &ingest.Batch{
 		PackageID: "test-package",

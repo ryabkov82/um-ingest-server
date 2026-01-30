@@ -25,7 +25,9 @@ type Sender struct {
 	maxRetries   int
 	backoffMs    int
 	backoffMaxMs int
-	authHeader   string // "Basic base64(user:pass)" or empty
+	authHeader   string          // "Basic base64(user:pass)" or empty
+	timings      *ingest.Timings // Optional timings for metrics
+	isErrors     bool            // true if this sender is for errors endpoint
 }
 
 // ResolveDeliveryAuth resolves authentication credentials for 1C delivery
@@ -47,7 +49,9 @@ func ResolveDeliveryAuth(jobAuth *job.AuthConfig, envUser, envPass string) (stri
 }
 
 // NewSender creates a new sender
-func NewSender(endpoint string, gzip bool, timeoutSeconds, maxRetries, backoffMs, backoffMaxMs int, auth *job.AuthConfig, envUser, envPass string) *Sender {
+// If timings is nil, metrics collection is disabled
+// isErrors indicates if this sender is for errors endpoint (affects which timings are recorded)
+func NewSender(endpoint string, gzip bool, timeoutSeconds, maxRetries, backoffMs, backoffMaxMs int, auth *job.AuthConfig, envUser, envPass string, timings *ingest.Timings, isErrors bool) *Sender {
 	user, pass, fromPayload := ResolveDeliveryAuth(auth, envUser, envPass)
 
 	authHeader := ""
@@ -71,6 +75,8 @@ func NewSender(endpoint string, gzip bool, timeoutSeconds, maxRetries, backoffMs
 		backoffMs:    backoffMs,
 		backoffMaxMs: backoffMaxMs,
 		authHeader:   authHeader,
+		timings:      timings,
+		isErrors:     isErrors,
 	}
 }
 
@@ -119,7 +125,15 @@ func (s *Sender) SendBatch(ctx context.Context, batch *ingest.Batch) error {
 // sendBatchOnce sends a batch once
 func (s *Sender) sendBatchOnce(ctx context.Context, batch *ingest.Batch) error {
 	// Marshal JSON
+	marshalStart := time.Now()
 	jsonData, err := json.Marshal(batch)
+	if s.timings != nil {
+		if s.isErrors {
+			s.timings.ObserveErrorsMarshal(time.Since(marshalStart))
+		} else {
+			s.timings.ObserveDataMarshal(time.Since(marshalStart))
+		}
+	}
 	if err != nil {
 		return fmt.Errorf("marshal error: %w", err)
 	}
@@ -128,6 +142,7 @@ func (s *Sender) sendBatchOnce(ctx context.Context, batch *ingest.Batch) error {
 	var body io.Reader = bytes.NewReader(jsonData)
 	contentEncoding := ""
 	if s.gzip {
+		gzipStart := time.Now()
 		var buf bytes.Buffer
 		gz := gzip.NewWriter(&buf)
 		if _, err := gz.Write(jsonData); err != nil {
@@ -135,6 +150,13 @@ func (s *Sender) sendBatchOnce(ctx context.Context, batch *ingest.Batch) error {
 		}
 		if err := gz.Close(); err != nil {
 			return fmt.Errorf("gzip close error: %w", err)
+		}
+		if s.timings != nil {
+			if s.isErrors {
+				s.timings.ObserveErrorsGzip(time.Since(gzipStart))
+			} else {
+				s.timings.ObserveDataGzip(time.Since(gzipStart))
+			}
 		}
 		body = &buf
 		contentEncoding = "gzip"
@@ -160,7 +182,15 @@ func (s *Sender) sendBatchOnce(ctx context.Context, batch *ingest.Batch) error {
 	req.Header.Set("X-UM-RowsCount", fmt.Sprintf("%d", len(batch.Rows)))
 
 	// Send request
+	httpStart := time.Now()
 	resp, err := s.client.Do(req)
+	if s.timings != nil {
+		if s.isErrors {
+			s.timings.ObserveErrorsHTTP(time.Since(httpStart))
+		} else {
+			s.timings.ObserveDataHTTP(time.Since(httpStart))
+		}
+	}
 	if err != nil {
 		return fmt.Errorf("http error: %w", err)
 	}
@@ -285,7 +315,11 @@ func (s *Sender) SendErrorBatch(ctx context.Context, errorBatch *ingest.ErrorBat
 // sendErrorBatchOnce sends an error batch once
 func (s *Sender) sendErrorBatchOnce(ctx context.Context, errorBatch *ingest.ErrorBatch) error {
 	// Marshal JSON
+	marshalStart := time.Now()
 	jsonData, err := json.Marshal(errorBatch)
+	if s.timings != nil {
+		s.timings.ObserveErrorsMarshal(time.Since(marshalStart))
+	}
 	if err != nil {
 		return fmt.Errorf("marshal error: %w", err)
 	}
@@ -294,6 +328,7 @@ func (s *Sender) sendErrorBatchOnce(ctx context.Context, errorBatch *ingest.Erro
 	var body io.Reader = bytes.NewReader(jsonData)
 	contentEncoding := ""
 	if s.gzip {
+		gzipStart := time.Now()
 		var buf bytes.Buffer
 		gz := gzip.NewWriter(&buf)
 		if _, err := gz.Write(jsonData); err != nil {
@@ -301,6 +336,9 @@ func (s *Sender) sendErrorBatchOnce(ctx context.Context, errorBatch *ingest.Erro
 		}
 		if err := gz.Close(); err != nil {
 			return fmt.Errorf("gzip close error: %w", err)
+		}
+		if s.timings != nil {
+			s.timings.ObserveErrorsGzip(time.Since(gzipStart))
 		}
 		body = &buf
 		contentEncoding = "gzip"
@@ -330,7 +368,11 @@ func (s *Sender) sendErrorBatchOnce(ctx context.Context, errorBatch *ingest.Erro
 	}
 
 	// Send request
+	httpStart := time.Now()
 	resp, err := s.client.Do(req)
+	if s.timings != nil {
+		s.timings.ObserveErrorsHTTP(time.Since(httpStart))
+	}
 	if err != nil {
 		return fmt.Errorf("http error: %w", err)
 	}

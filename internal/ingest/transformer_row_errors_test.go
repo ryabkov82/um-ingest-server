@@ -52,13 +52,13 @@ func TestRowLevelErrorDoesNotSkipRow(t *testing.T) {
 		},
 	}
 
-	parser, err := NewParser(j, "/tmp")
+	parser, err := NewParser(j, "/tmp", nil)
 	if err != nil {
 		t.Fatalf("NewParser failed: %v", err)
 	}
 	defer parser.Close()
 
-	transformer, err := NewTransformer(j, parser)
+	transformer, err := NewTransformer(j, parser, nil)
 	if err != nil {
 		t.Fatalf("NewTransformer failed: %v", err)
 	}
@@ -146,13 +146,13 @@ func TestRowLevelTypeErrorDoesNotSkipRow(t *testing.T) {
 		},
 	}
 
-	parser, err := NewParser(j, "/tmp")
+	parser, err := NewParser(j, "/tmp", nil)
 	if err != nil {
 		t.Fatalf("NewParser failed: %v", err)
 	}
 	defer parser.Close()
 
-	transformer, err := NewTransformer(j, parser)
+	transformer, err := NewTransformer(j, parser, nil)
 	if err != nil {
 		t.Fatalf("NewTransformer failed: %v", err)
 	}
@@ -238,13 +238,13 @@ func TestIndexOutOfRangeDoesNotSkipRow(t *testing.T) {
 		},
 	}
 
-	parser, err := NewParser(j, "/tmp")
+	parser, err := NewParser(j, "/tmp", nil)
 	if err != nil {
 		t.Fatalf("NewParser failed: %v", err)
 	}
 	defer parser.Close()
 
-	transformer, err := NewTransformer(j, parser)
+	transformer, err := NewTransformer(j, parser, nil)
 	if err != nil {
 		t.Fatalf("NewTransformer failed: %v", err)
 	}

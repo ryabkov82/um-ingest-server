@@ -49,13 +49,13 @@ func TestMalformedCSVRowStillFailsJob(t *testing.T) {
 		},
 	}
 
-	parser, err := NewParser(j, "/tmp")
+	parser, err := NewParser(j, "/tmp", nil)
 	if err != nil {
 		t.Fatalf("NewParser failed: %v", err)
 	}
 	defer parser.Close()
 
-	transformer, err := NewTransformer(j, parser)
+	transformer, err := NewTransformer(j, parser, nil)
 	if err != nil {
 		t.Fatalf("NewTransformer failed: %v", err)
 	}
@@ -129,14 +129,14 @@ func TestHeaderMismatchStillFailsJob(t *testing.T) {
 		},
 	}
 
-	parser, err := NewParser(j, "/tmp")
+	parser, err := NewParser(j, "/tmp", nil)
 	if err != nil {
 		t.Fatalf("NewParser failed: %v", err)
 	}
 	defer parser.Close()
 
 	// NewTransformer должна упасть с ошибкой missing header column
-	_, err = NewTransformer(j, parser)
+	_, err = NewTransformer(j, parser, nil)
 	if err == nil {
 		t.Fatal("Expected error for missing header column, but got nil")
 	}

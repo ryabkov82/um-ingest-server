@@ -66,7 +66,7 @@ func TestNoErrorsNoCallsToErrorsEndpoint(t *testing.T) {
 	}
 	j.ID = jobID
 
-	processor, err := NewProcessor(j, store, tmpDir)
+	processor, err := NewProcessor(j, store, tmpDir, nil)
 	if err != nil {
 		t.Fatalf("NewProcessor() error = %v", err)
 	}
@@ -149,7 +149,7 @@ func TestFirstErrorTriggersSend(t *testing.T) {
 	}
 	j.ID = jobID
 
-	processor, err := NewProcessor(j, store, tmpDir)
+	processor, err := NewProcessor(j, store, tmpDir, nil)
 	if err != nil {
 		t.Fatalf("NewProcessor() error = %v", err)
 	}
@@ -247,7 +247,7 @@ func TestDoNotSendEmptyChunkOnFlush(t *testing.T) {
 	}
 	j.ID = jobID
 
-	processor, err := NewProcessor(j, store, tmpDir)
+	processor, err := NewProcessor(j, store, tmpDir, nil)
 	if err != nil {
 		t.Fatalf("NewProcessor() error = %v", err)
 	}

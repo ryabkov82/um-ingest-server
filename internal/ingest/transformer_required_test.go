@@ -55,7 +55,7 @@ func TestRequiredFieldStringEmpty(t *testing.T) {
 	}
 	j.ID = jobID
 
-	processor, err := NewProcessor(j, store, tmpDir)
+	processor, err := NewProcessor(j, store, tmpDir, nil)
 	if err != nil {
 		t.Fatalf("NewProcessor() error = %v", err)
 	}
@@ -169,7 +169,7 @@ func TestRequiredFieldNumberEmpty(t *testing.T) {
 	}
 	j.ID = jobID
 
-	processor, err := NewProcessor(j, store, tmpDir)
+	processor, err := NewProcessor(j, store, tmpDir, nil)
 	if err != nil {
 		t.Fatalf("NewProcessor() error = %v", err)
 	}
@@ -248,7 +248,7 @@ func TestRequiredFieldDateEmpty(t *testing.T) {
 	}
 	j.ID = jobID
 
-	processor, err := NewProcessor(j, store, tmpDir)
+	processor, err := NewProcessor(j, store, tmpDir, nil)
 	if err != nil {
 		t.Fatalf("NewProcessor() error = %v", err)
 	}
@@ -326,7 +326,7 @@ func TestRequiredFalseNumberEmpty(t *testing.T) {
 	}
 	j.ID = jobID
 
-	processor, err := NewProcessor(j, store, tmpDir)
+	processor, err := NewProcessor(j, store, tmpDir, nil)
 	if err != nil {
 		t.Fatalf("NewProcessor() error = %v", err)
 	}
@@ -413,7 +413,7 @@ func TestRequiredFalseDateEmpty(t *testing.T) {
 	}
 	j.ID = jobID
 
-	processor, err := NewProcessor(j, store, tmpDir)
+	processor, err := NewProcessor(j, store, tmpDir, nil)
 	if err != nil {
 		t.Fatalf("NewProcessor() error = %v", err)
 	}
@@ -500,7 +500,7 @@ func TestRequiredFieldWithOrderSource(t *testing.T) {
 	}
 	j.ID = jobID
 
-	processor, err := NewProcessor(j, store, tmpDir)
+	processor, err := NewProcessor(j, store, tmpDir, nil)
 	if err != nil {
 		t.Fatalf("NewProcessor() error = %v", err)
 	}
@@ -579,7 +579,7 @@ func TestRequiredFieldWithWhitespace(t *testing.T) {
 	}
 	j.ID = jobID
 
-	processor, err := NewProcessor(j, store, tmpDir)
+	processor, err := NewProcessor(j, store, tmpDir, nil)
 	if err != nil {
 		t.Fatalf("NewProcessor() error = %v", err)
 	}

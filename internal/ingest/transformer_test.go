@@ -113,7 +113,7 @@ func TestHeaderMapping(t *testing.T) {
 
 	j.InputPath = tmpFile
 
-	parser, err := NewParser(j, "/tmp")
+	parser, err := NewParser(j, "/tmp", nil)
 	if err != nil {
 		t.Fatalf("NewParser() error = %v", err)
 	}

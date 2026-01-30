@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"golang.org/x/text/encoding/charmap"
 
@@ -25,10 +26,12 @@ type Parser struct {
 	errorsFile    *os.File
 	errorsWriter  *bufio.Writer
 	errorsEncoder *json.Encoder
+	timings       *Timings // Optional timings for metrics
 }
 
 // NewParser creates a new parser for a job
-func NewParser(j *job.Job, allowedBaseDir string) (*Parser, error) {
+// If timings is nil, metrics collection is disabled
+func NewParser(j *job.Job, allowedBaseDir string, timings *Timings) (*Parser, error) {
 	// Validate and resolve input path (with symlink resolution)
 	resolvedPath, err := ValidatePath(j.InputPath, allowedBaseDir)
 	if err != nil {
@@ -65,6 +68,7 @@ func NewParser(j *job.Job, allowedBaseDir string) (*Parser, error) {
 		reader:    csvReader,
 		headerMap: make(map[string]int),
 		rowNo:     0,
+		timings:   timings,
 	}
 
 	// Open errors file if specified
@@ -143,7 +147,12 @@ func (p *Parser) ReadRow(ctx context.Context) ([]string, error) {
 	default:
 	}
 
+	start := time.Now()
 	record, err := p.reader.Read()
+	if p.timings != nil {
+		p.timings.ObserveCSVRead(time.Since(start))
+	}
+
 	if err == io.EOF {
 		return nil, io.EOF
 	}

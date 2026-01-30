@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	_ "net/http/pprof" // Register pprof handlers
 	"os"
 	"os/signal"
+	"runtime/pprof"
 	"syscall"
 	"time"
 
@@ -43,6 +45,32 @@ func main() {
 
 	// Log version at startup
 	log.Printf("Starting %s", version.String())
+
+	// Start CPU profiling if requested
+	cpuProfilePath := os.Getenv("UM_CPU_PROFILE")
+	if cpuProfilePath != "" {
+		f, err := os.Create(cpuProfilePath)
+		if err != nil {
+			log.Fatalf("Failed to create CPU profile: %v", err)
+		}
+		defer f.Close()
+		if err := pprof.StartCPUProfile(f); err != nil {
+			log.Fatalf("Failed to start CPU profile: %v", err)
+		}
+		defer pprof.StopCPUProfile()
+		log.Printf("CPU profiling enabled, writing to %s", cpuProfilePath)
+	}
+
+	// Start pprof HTTP server if requested
+	pprofAddr := os.Getenv("UM_PPROF_ADDR")
+	if pprofAddr != "" {
+		go func() {
+			log.Printf("Starting pprof HTTP server on %s", pprofAddr)
+			if err := http.ListenAndServe(pprofAddr, nil); err != nil {
+				log.Printf("pprof HTTP server error: %v", err)
+			}
+		}()
+	}
 
 	// Get configuration from environment
 	allowedBaseDir := os.Getenv("ALLOWED_BASE_DIR")
@@ -137,8 +165,11 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 	}
 	defer store.ClearCancel(j.ID)
 
+	// Create timings for metrics collection
+	timings := ingest.NewTimings()
+
 	// Create processor
-	processor, err := ingest.NewProcessor(j, store, allowedBaseDir)
+	processor, err := ingest.NewProcessor(j, store, allowedBaseDir, timings)
 	if err != nil {
 		log.Printf("Job %s: Failed to create processor: %v", j.ID, err)
 		store.UpdateError(j.ID, err)
@@ -157,6 +188,8 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 		j.Delivery.Auth,
 		env1CUser,
 		env1CPass,
+		timings,
+		false, // isErrors = false for data endpoint
 	)
 
 	// Create error sender if errorsEndpoint is configured
@@ -172,6 +205,8 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 			j.Delivery.Auth,
 			env1CUser,
 			env1CPass,
+			timings,
+			true, // isErrors = true for errors endpoint
 		)
 	}
 
@@ -358,6 +393,9 @@ done:
 	if errorSender != nil {
 		store.UpdateErrors(j.ID, processor.GetErrorsTotal(), errorsSent)
 	}
+
+	// Log timings summary
+	log.Printf("Job %s: Timings summary: %s", j.ID, timings.String())
 
 	// Check final status
 	if sendErr != nil {

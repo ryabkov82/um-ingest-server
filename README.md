@@ -95,6 +95,8 @@ go build -ldflags "\
 - `UM_INGEST_API_KEY` - API ключ для аутентификации (если не задан, auth отключен)
 - `UM_1C_BASIC_USER` - имя пользователя для Basic аутентификации при отправке батчей в 1С (обязательно, если не указан `delivery.auth`)
 - `UM_1C_BASIC_PASS` - пароль для Basic аутентификации при отправке батчей в 1С (обязательно, если не указан `delivery.auth`)
+- `UM_PPROF_ADDR` - адрес для HTTP сервера pprof (опционально, например: `localhost:6060`). Если задан, запускается HTTP сервер для профилирования производительности. Доступны стандартные endpoints Go pprof: `/debug/pprof/`, `/debug/pprof/profile`, `/debug/pprof/heap` и т.д.
+- `UM_CPU_PROFILE` - путь к файлу для записи CPU профиля (опционально, например: `/tmp/cpu.prof`). Если задан, сервис записывает CPU профиль в указанный файл на время работы процесса. Для анализа используйте `go tool pprof`.
 
 **Примечание:** Basic Authentication используется для аутентификации при обращении к HTTP endpoint 1С (уровень публикации/платформы). `um-ingest-server` формирует заголовок `Authorization: Basic ...` при отправке батчей данных и ошибок в 1С. Это не связано с аутентификацией на уровне IIS или веб-сервера.
 
@@ -616,7 +618,7 @@ Authorization: Basic dXNlcjpwYXNz
 
 - Ошибки парсинга строк логируются в JSONL файл (если указан `errorsJsonl`)
 - Если задан `delivery.errorsEndpoint`, ошибки отправляются батчами в 1С
-- Строки с ошибками пропускаются, job продолжает работу
+- Строки с row-level ошибками (required, type, maxLen, index out of range) **не пропускаются** — они попадают в batch, а ошибки фиксируются отдельно
 - Счетчики `errorsTotal` и `errorsSent` отображаются в статусе job
 
 ### Семантика HTTP-кодов при отправке батчей в 1С
@@ -638,6 +640,63 @@ Authorization: Basic dXNlcjpwYXNz
 - **409 Conflict** — батч уже был обработан ранее (idempotency)
 - **400/401** — ошибка, которая не будет исправлена повторной отправкой
 - **429/503/5xx** — временная ошибка, требующая повторной отправки
+
+## Профилирование и метрики
+
+### pprof HTTP сервер
+
+Для профилирования производительности в реальном времени:
+
+```bash
+export UM_PPROF_ADDR=localhost:6060
+./um-ingest-server
+```
+
+После запуска доступны стандартные endpoints Go pprof:
+- `http://localhost:6060/debug/pprof/` - обзор профилей
+- `http://localhost:6060/debug/pprof/profile` - CPU профиль (30 секунд)
+- `http://localhost:6060/debug/pprof/heap` - профиль памяти
+- `http://localhost:6060/debug/pprof/goroutine` - профиль горутин
+
+Пример использования:
+```bash
+# Получить CPU профиль за 30 секунд
+curl http://localhost:6060/debug/pprof/profile > cpu.prof
+go tool pprof cpu.prof
+```
+
+### CPU профиль в файл
+
+Для записи CPU профиля на время работы процесса:
+
+```bash
+export UM_CPU_PROFILE=/tmp/cpu.prof
+./um-ingest-server
+# ... работа сервиса ...
+# Ctrl+C для остановки
+go tool pprof /tmp/cpu.prof
+```
+
+### Метрики времени выполнения
+
+После завершения каждого job сервис автоматически логирует сводку метрик времени выполнения по стадиям пайплайна:
+
+```
+Job abc-123: Timings summary: CSV read: total=2.5s count=1000000 avg=2.5µs; Transform: total=5.2s count=1000000 avg=5.2µs; Batch assembly: total=50ms count=500 avg=100µs; Data marshal: total=200ms count=500 avg=400µs; Data gzip: total=150ms count=500 avg=300µs; Data HTTP: total=10s count=500 avg=20ms; Errors HTTP: total=500ms count=10 avg=50ms
+```
+
+**Метрики включают:**
+- **CSV read** - суммарное время чтения строк из CSV (`csv.Reader.Read()`)
+- **Transform** - суммарное время трансформации строк (`TransformRow`)
+- **Batch assembly** - суммарное время сборки батчей
+- **Data marshal** - суммарное время JSON маршалинга для data batches
+- **Data gzip** - суммарное время gzip сжатия для data batches (если включено)
+- **Data HTTP** - суммарное время HTTP round-trip для data batches
+- **Errors marshal/gzip/HTTP** - аналогичные метрики для error batches
+
+Для каждой метрики выводится: общее время, количество операций, среднее время на операцию.
+
+**Примечание:** Метрики собираются только во время выполнения job и не влияют на производительность (используется только stdlib, без внешних зависимостей).
 
 ## Тестирование
 

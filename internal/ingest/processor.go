@@ -28,13 +28,14 @@ type Processor struct {
 }
 
 // NewProcessor creates a new processor
-func NewProcessor(j *job.Job, store *job.Store, allowedBaseDir string) (*Processor, error) {
-	parser, err := NewParser(j, allowedBaseDir)
+// If timings is nil, metrics collection is disabled
+func NewProcessor(j *job.Job, store *job.Store, allowedBaseDir string, timings *Timings) (*Processor, error) {
+	parser, err := NewParser(j, allowedBaseDir, timings)
 	if err != nil {
 		return nil, err
 	}
 
-	transformer, err := NewTransformer(j, parser)
+	transformer, err := NewTransformer(j, parser, timings)
 	if err != nil {
 		parser.Close()
 		return nil, err
@@ -202,11 +203,17 @@ func (p *Processor) parseAndBatch(ctx context.Context) error {
 		// Send batch when full
 		if len(currentBatch) >= p.job.Delivery.BatchSize {
 			batchNo++
+			
+			// Measure batch assembly time
+			assemblyStart := time.Now()
 			batch := &Batch{
 				PackageID: p.job.PackageID,
 				BatchNo:   batchNo,
 				Register:  p.job.Schema.Register,
 				Rows:      currentBatch,
+			}
+			if p.parser.timings != nil {
+				p.parser.timings.ObserveBatchAssembly(time.Since(assemblyStart))
 			}
 
 			// Send batch (blocking if channel full - backpressure)
@@ -230,11 +237,17 @@ func (p *Processor) parseAndBatch(ctx context.Context) error {
 	// Send remaining batch
 	if len(currentBatch) > 0 {
 		batchNo++
+		
+		// Measure batch assembly time
+		assemblyStart := time.Now()
 		batch := &Batch{
 			PackageID: p.job.PackageID,
 			BatchNo:   batchNo,
 			Register:  p.job.Schema.Register,
 			Rows:      currentBatch,
+		}
+		if p.parser.timings != nil {
+			p.parser.timings.ObserveBatchAssembly(time.Since(assemblyStart))
 		}
 
 		select {
@@ -248,7 +261,12 @@ func (p *Processor) parseAndBatch(ctx context.Context) error {
 
 	// Flush remaining error batch
 	if len(p.errorBuffer) > 0 {
+		// Measure batch assembly time for final error batch
+		assemblyStart := time.Now()
 		p.flushErrorBatch(ctx)
+		if p.parser.timings != nil {
+			p.parser.timings.ObserveBatchAssembly(time.Since(assemblyStart))
+		}
 	}
 
 	// Close error channel
