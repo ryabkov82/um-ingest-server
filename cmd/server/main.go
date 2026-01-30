@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"runtime/pprof"
 	"strconv"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -220,17 +221,21 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 		false, // isErrors = false for data endpoint
 	)
 
+	// Atomic counters for async send progress (updated in callbacks, synced to store periodically)
+	var sentRows atomic.Int64
+	var sentBatches atomic.Int64
+	var sentErrors atomic.Int64
+	var sentErrorBatches atomic.Int64
+
 	// Create async sender for data batches with callback to track progress
-	var rowsSent, batchesSent, errorsSent int64
 	asyncDataSender := client.NewAsyncSender(
 		dataBaseSender,
 		sendQueue,
 		jobCancel,
 		func(batch *ingest.Batch) {
-			// Callback after successful batch send
-			rowsSent += int64(len(batch.Rows))
-			batchesSent++
-			store.UpdateSendProgress(j.ID, rowsSent, batchesSent)
+			// Callback after successful batch send - only update atomic counters
+			sentRows.Add(int64(len(batch.Rows)))
+			sentBatches.Add(1)
 			log.Printf("Job %s: Batch %d sent successfully (%d rows)", j.ID, batch.BatchNo, len(batch.Rows))
 		},
 	)
@@ -257,14 +262,33 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 			errSendQueue,
 			jobCancel,
 			func(errorBatch *ingest.ErrorBatch) {
-				// Callback after successful error batch send
-				errorsSent += int64(len(errorBatch.Errors))
-				store.UpdateErrors(j.ID, processor.GetErrorsTotal(), errorsSent)
+				// Callback after successful error batch send - only update atomic counters
+				sentErrors.Add(int64(len(errorBatch.Errors)))
+				sentErrorBatches.Add(1)
 				log.Printf("Job %s: Error batch %d sent successfully (%d errors)", j.ID, errorBatch.BatchNo, len(errorBatch.Errors))
 			},
 		)
 		asyncErrorSender.Start(jobCtx, errSendWorkers)
 	}
+
+	// Start periodic sync of counters to store (every 1 second)
+	syncTicker := time.NewTicker(1 * time.Second)
+	syncDone := make(chan struct{})
+	go func() {
+		defer close(syncDone)
+		for {
+			select {
+			case <-syncTicker.C:
+				// Periodic sync
+				store.UpdateSendProgress(j.ID, sentRows.Load(), sentBatches.Load())
+				if asyncErrorSender != nil {
+					store.UpdateErrors(j.ID, processor.GetErrorsTotal(), sentErrors.Load())
+				}
+			case <-jobCtx.Done():
+				return
+			}
+		}
+	}()
 
 	// Start processing (parser goroutine)
 	processErrChan := make(chan error, 1)
@@ -281,7 +305,14 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 	for {
 		select {
 		case <-jobCtx.Done():
-			// Job was canceled
+			// Job was canceled - stop ticker, sync counters, then return
+			syncTicker.Stop()
+			<-syncDone
+			// Final sync before canceling
+			store.UpdateSendProgress(j.ID, sentRows.Load(), sentBatches.Load())
+			if asyncErrorSender != nil {
+				store.UpdateErrors(j.ID, processor.GetErrorsTotal(), sentErrors.Load())
+			}
 			store.UpdateStatus(j.ID, job.StatusCanceled)
 			return
 		case batch, ok := <-batchChan:
@@ -303,6 +334,13 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 						if httpErr.StatusCode >= 400 && httpErr.StatusCode < 500 && httpErr.StatusCode != 429 {
 							// Fatal error, cancel processing
 							jobCancel()
+							// Stop ticker and sync counters before failing
+							syncTicker.Stop()
+							<-syncDone
+							store.UpdateSendProgress(j.ID, sentRows.Load(), sentBatches.Load())
+							if asyncErrorSender != nil {
+								store.UpdateErrors(j.ID, processor.GetErrorsTotal(), sentErrors.Load())
+							}
 							store.UpdateError(j.ID, err)
 							store.UpdateStatus(j.ID, job.StatusFailed)
 							return
@@ -349,7 +387,11 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 					if err != context.Canceled {
 						// Format error message with details
 						errorMsg := fmt.Sprintf("failed to enqueue error batch %d: %v", errorBatch.BatchNo, err)
-						store.UpdateErrors(j.ID, processor.GetErrorsTotal(), errorsSent)
+						// Stop ticker and sync counters before failing
+						syncTicker.Stop()
+						<-syncDone
+						store.UpdateSendProgress(j.ID, sentRows.Load(), sentBatches.Load())
+						store.UpdateErrors(j.ID, processor.GetErrorsTotal(), sentErrors.Load())
 						store.UpdateError(j.ID, fmt.Errorf(errorMsg))
 						store.UpdateStatus(j.ID, job.StatusFailed)
 						return
@@ -360,6 +402,13 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 		case err := <-processErrChan:
 			if err != nil && err != context.Canceled {
 				log.Printf("Job %s: Processing error: %v", j.ID, err)
+				// Stop ticker and sync counters before failing
+				syncTicker.Stop()
+				<-syncDone
+				store.UpdateSendProgress(j.ID, sentRows.Load(), sentBatches.Load())
+				if asyncErrorSender != nil {
+					store.UpdateErrors(j.ID, processor.GetErrorsTotal(), sentErrors.Load())
+				}
 				store.UpdateError(j.ID, err)
 				store.UpdateStatus(j.ID, job.StatusFailed)
 				return
@@ -369,6 +418,10 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 	}
 
 done:
+	// Stop periodic sync ticker
+	syncTicker.Stop()
+	<-syncDone
+
 	// Wait for all async senders to finish and check for errors
 	var sendErr error
 	if err := asyncDataSender.CloseAndWait(); err != nil {
@@ -388,16 +441,21 @@ done:
 				}
 				errorMsg = fmt.Sprintf("failed to deliver error batch to %s: HTTP %d: %s", j.Delivery.ErrorsEndpoint, httpErr.StatusCode, bodySnippet)
 			}
-			store.UpdateErrors(j.ID, processor.GetErrorsTotal(), errorsSent)
+			// Stop ticker and final sync before failing
+			syncTicker.Stop()
+			<-syncDone
+			store.UpdateSendProgress(j.ID, sentRows.Load(), sentBatches.Load())
+			store.UpdateErrors(j.ID, processor.GetErrorsTotal(), sentErrors.Load())
 			store.UpdateError(j.ID, fmt.Errorf(errorMsg))
 			store.UpdateStatus(j.ID, job.StatusFailed)
 			return
 		}
 	}
 
-	// Final error count update
+	// Final sync of all counters to store (after all senders finished)
+	store.UpdateSendProgress(j.ID, sentRows.Load(), sentBatches.Load())
 	if asyncErrorSender != nil {
-		store.UpdateErrors(j.ID, processor.GetErrorsTotal(), errorsSent)
+		store.UpdateErrors(j.ID, processor.GetErrorsTotal(), sentErrors.Load())
 	}
 
 	// Log timings summary (only if timings are enabled)
