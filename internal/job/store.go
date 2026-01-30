@@ -18,22 +18,22 @@ var ErrJobAlreadyRunning = errors.New("job already running for this packageId")
 
 // Store manages jobs in memory
 type Store struct {
-	mu                sync.RWMutex
-	jobs              map[string]*Job              // jobId -> Job
-	activeJobByPackage map[string]string           // packageId -> jobId (only for queued/running)
-	lastJobByPackage   map[string]string           // packageId -> jobId (last completed job)
-	queue             chan *Job
-	cancels           map[string]context.CancelFunc
+	mu                 sync.RWMutex
+	jobs               map[string]*Job   // jobId -> Job
+	activeJobByPackage map[string]string // packageId -> jobId (only for queued/running)
+	lastJobByPackage   map[string]string // packageId -> jobId (last completed job)
+	queue              chan *Job
+	cancels            map[string]context.CancelFunc
 }
 
 // NewStore creates a new job store
 func NewStore() *Store {
 	return &Store{
-		jobs:              make(map[string]*Job),
+		jobs:               make(map[string]*Job),
 		activeJobByPackage: make(map[string]string),
 		lastJobByPackage:   make(map[string]string),
-		queue:             make(chan *Job, 1000),
-		cancels:           make(map[string]context.CancelFunc),
+		queue:              make(chan *Job, 1000),
+		cancels:            make(map[string]context.CancelFunc),
 	}
 }
 
@@ -60,16 +60,20 @@ func (s *Store) Create(j *Job) (string, error) {
 	j.ID = uuid.New().String()
 	j.Status = StatusQueued
 
+	// Register job in store FIRST (before enqueueing to avoid race with worker)
+	s.jobs[j.ID] = j
+	s.activeJobByPackage[j.PackageID] = j.ID
+
 	// Try to send to queue (non-blocking)
 	select {
 	case s.queue <- j:
-		// Successfully queued, now create the job
-		s.jobs[j.ID] = j
-		s.activeJobByPackage[j.PackageID] = j.ID
+		// Successfully queued, job is already registered
 		s.mu.Unlock()
 		return j.ID, nil
 	default:
-		// Queue full, don't create job
+		// Queue full, rollback registration
+		delete(s.jobs, j.ID)
+		delete(s.activeJobByPackage, j.PackageID)
 		s.mu.Unlock()
 		return "", ErrQueueFull
 	}
@@ -250,17 +254,17 @@ func (s *Store) Cancel(id string) error {
 	j.Status = StatusCanceled
 	now := time.Now()
 	j.FinishedAt = &now
-	
+
 	// Remove from activeJobByPackage
 	if s.activeJobByPackage[j.PackageID] == id {
 		delete(s.activeJobByPackage, j.PackageID)
 	}
-	
+
 	// Save as last job for this packageId
 	if j.PackageID != "" {
 		s.lastJobByPackage[j.PackageID] = id
 	}
-	
+
 	s.mu.Unlock()
 
 	// Call cancel function outside of lock
@@ -322,4 +326,3 @@ func (s *Store) GetLastJobByPackage(packageID string) (string, error) {
 
 	return jobID, nil
 }
-
