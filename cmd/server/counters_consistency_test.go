@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,15 +26,16 @@ func TestCountersConsistency(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	// Create test CSV file with known number of rows
-	// Total rows: 3951 (to test with batchSize=2000: 2 full batches + 1 partial)
-	totalRows := 3951
-	batchSize := 2000
+	// Total rows: 123 (to test with batchSize=50: 2 full batches + 1 partial)
+	totalRows := 123
+	batchSize := 50
 	csvFile := filepath.Join(tmpDir, "test.csv")
-	csvContent := "Name,Date,Amount\n"
+	var csvBuilder strings.Builder
+	csvBuilder.WriteString("Name,Date,Amount\n")
 	for i := 1; i <= totalRows; i++ {
-		csvContent += fmt.Sprintf("item%d,01.01.2026,%d\n", i, i*10)
+		csvBuilder.WriteString(fmt.Sprintf("item%d,01.01.2026,%d\n", i, i*10))
 	}
-	if err := os.WriteFile(csvFile, []byte(csvContent), 0644); err != nil {
+	if err := os.WriteFile(csvFile, []byte(csvBuilder.String()), 0644); err != nil {
 		t.Fatalf("Failed to write CSV: %v", err)
 	}
 
@@ -162,11 +164,12 @@ func TestCountersConsistencyPartialBatch(t *testing.T) {
 	batchSize := 10
 	totalRows := 23
 	csvFile := filepath.Join(tmpDir, "test.csv")
-	csvContent := "Name,Date,Amount\n"
+	var csvBuilder strings.Builder
+	csvBuilder.WriteString("Name,Date,Amount\n")
 	for i := 1; i <= totalRows; i++ {
-		csvContent += fmt.Sprintf("item%d,01.01.2026,%d\n", i, i*10)
+		csvBuilder.WriteString(fmt.Sprintf("item%d,01.01.2026,%d\n", i, i*10))
 	}
-	if err := os.WriteFile(csvFile, []byte(csvContent), 0644); err != nil {
+	if err := os.WriteFile(csvFile, []byte(csvBuilder.String()), 0644); err != nil {
 		t.Fatalf("Failed to write CSV: %v", err)
 	}
 
@@ -225,20 +228,25 @@ func TestCountersConsistencyPartialBatch(t *testing.T) {
 	// Process job
 	processJob(context.Background(), j, store, tmpDir, "", "", 1, 8, 1, 8)
 
-	// Wait for async operations to complete (with timeout)
-	deadline := time.Now().Add(5 * time.Second)
+	// Wait for async operations to complete (short timeout with small sleep)
+	deadline := time.Now().Add(300 * time.Millisecond)
+	var finalJob *job.Job
 	for time.Now().Before(deadline) {
-		finalJob, _ := store.Get(jobID)
+		var err error
+		finalJob, err = store.Get(jobID)
+		if err != nil {
+			t.Fatalf("Failed to get job: %v", err)
+		}
 		if finalJob.Status == job.StatusSucceeded || finalJob.Status == job.StatusFailed {
 			break
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 	}
-
-	// Get final job status
-	finalJob, err := store.Get(jobID)
-	if err != nil {
-		t.Fatalf("Failed to get job: %v", err)
+	if finalJob == nil {
+		finalJob, _ = store.Get(jobID)
+	}
+	if finalJob.Status != job.StatusSucceeded && finalJob.Status != job.StatusFailed {
+		t.Fatalf("Job did not complete in time, status: %s", finalJob.Status)
 	}
 
 	// Verify consistency with partial batch

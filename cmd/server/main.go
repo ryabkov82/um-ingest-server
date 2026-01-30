@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"runtime/pprof"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -273,7 +274,12 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 
 	// Start periodic sync of counters to store (every 1 second)
 	syncTicker := time.NewTicker(1 * time.Second)
+	stopSync := make(chan struct{})
 	syncDone := make(chan struct{})
+	var stopOnce sync.Once
+	stopSyncFunc := func() {
+		close(stopSync)
+	}
 	go func() {
 		defer close(syncDone)
 		for {
@@ -285,6 +291,8 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 					store.UpdateErrors(j.ID, processor.GetErrorsTotal(), sentErrors.Load())
 				}
 			case <-jobCtx.Done():
+				return
+			case <-stopSync:
 				return
 			}
 		}
@@ -306,6 +314,7 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 		select {
 		case <-jobCtx.Done():
 			// Job was canceled - stop ticker, sync counters, then return
+			stopOnce.Do(stopSyncFunc)
 			syncTicker.Stop()
 			<-syncDone
 			// Final sync before canceling
@@ -335,6 +344,7 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 							// Fatal error, cancel processing
 							jobCancel()
 							// Stop ticker and sync counters before failing
+							stopOnce.Do(stopSyncFunc)
 							syncTicker.Stop()
 							<-syncDone
 							store.UpdateSendProgress(j.ID, sentRows.Load(), sentBatches.Load())
@@ -388,6 +398,7 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 						// Format error message with details
 						errorMsg := fmt.Sprintf("failed to enqueue error batch %d: %v", errorBatch.BatchNo, err)
 						// Stop ticker and sync counters before failing
+						stopOnce.Do(stopSyncFunc)
 						syncTicker.Stop()
 						<-syncDone
 						store.UpdateSendProgress(j.ID, sentRows.Load(), sentBatches.Load())
@@ -403,6 +414,7 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 			if err != nil && err != context.Canceled {
 				log.Printf("Job %s: Processing error: %v", j.ID, err)
 				// Stop ticker and sync counters before failing
+				stopOnce.Do(stopSyncFunc)
 				syncTicker.Stop()
 				<-syncDone
 				store.UpdateSendProgress(j.ID, sentRows.Load(), sentBatches.Load())
@@ -419,6 +431,7 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 
 done:
 	// Stop periodic sync ticker
+	stopOnce.Do(stopSyncFunc)
 	syncTicker.Stop()
 	<-syncDone
 
@@ -442,6 +455,7 @@ done:
 				errorMsg = fmt.Sprintf("failed to deliver error batch to %s: HTTP %d: %s", j.Delivery.ErrorsEndpoint, httpErr.StatusCode, bodySnippet)
 			}
 			// Stop ticker and final sync before failing
+			stopOnce.Do(stopSyncFunc)
 			syncTicker.Stop()
 			<-syncDone
 			store.UpdateSendProgress(j.ID, sentRows.Load(), sentBatches.Load())
