@@ -361,29 +361,22 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 	errorChan := processor.GetErrorChan()
 	batchChanClosed := false
 	errorChanClosed := false
+	shouldFinalize := false // Flag to exit loop and finalize
 
-	for {
+	for !shouldFinalize {
 		select {
 		case <-jobCtx.Done():
-			// Job was canceled - stop ticker, sync counters, then return
+			// Job was canceled - mark for finalization
 			ctxErr = jobCtx.Err()
-			stopOnce.Do(stopSyncFunc)
-			syncTicker.Stop()
-			<-syncDone
-			// Final sync before canceling
-			store.UpdateSendProgress(j.ID, sentRows.Load(), sentBatches.Load())
-			if asyncErrorSender != nil {
-				store.UpdateErrors(j.ID, processor.GetErrorsTotal(), sentErrors.Load())
-			}
-			store.UpdateStatus(j.ID, job.StatusCanceled)
-			return
+			shouldFinalize = true
 		case batch, ok := <-batchChan:
 			if !ok {
 				batchChanClosed = true
 				if errorChanClosed || asyncErrorSender == nil {
-					goto done
+					shouldFinalize = true
+				} else {
+					continue
 				}
-				continue
 			}
 
 			// Enqueue batch for async sending
@@ -394,17 +387,9 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 					// Don't overwrite it with context.Canceled
 					currentJob, _ := store.Get(j.ID)
 					if currentJob != nil && currentJob.LastError != "" {
-						// Error was already saved by onFatalError callback, just update status
+						// Error was already saved by onFatalError callback, mark for finalization
 						ctxErr = jobCtx.Err()
-						stopOnce.Do(stopSyncFunc)
-						syncTicker.Stop()
-						<-syncDone
-						store.UpdateSendProgress(j.ID, sentRows.Load(), sentBatches.Load())
-						if asyncErrorSender != nil {
-							store.UpdateErrors(j.ID, processor.GetErrorsTotal(), sentErrors.Load())
-						}
-						store.UpdateStatus(j.ID, job.StatusFailed)
-						return
+						shouldFinalize = true
 					}
 					// No stored error, this is a normal cancel - continue to handle it in jobCtx.Done() case
 				} else {
@@ -416,17 +401,7 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 							finalErr = err
 							jobCancel()
 							ctxErr = jobCtx.Err()
-							// Stop ticker and sync counters before failing
-							stopOnce.Do(stopSyncFunc)
-							syncTicker.Stop()
-							<-syncDone
-							store.UpdateSendProgress(j.ID, sentRows.Load(), sentBatches.Load())
-							if asyncErrorSender != nil {
-								store.UpdateErrors(j.ID, processor.GetErrorsTotal(), sentErrors.Load())
-							}
-							store.UpdateError(j.ID, err)
-							store.UpdateStatus(j.ID, job.StatusFailed)
-							return
+							shouldFinalize = true
 						}
 					}
 				}
@@ -437,14 +412,15 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 			if !ok {
 				errorChanClosed = true
 				if batchChanClosed {
-					goto done
+					shouldFinalize = true
+				} else {
+					continue
 				}
-				continue
 			}
 
 			// Enqueue error batch for async sending (required if errorsEndpoint is configured)
 			if asyncErrorSender != nil {
-				if errorBatch == nil || len(errorBatch.Errors) == 0 {
+				if len(errorBatch.Errors) == 0 {
 					// Skip empty error batches
 					continue
 				}
@@ -471,15 +447,9 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 						// Don't overwrite it with context.Canceled
 						currentJob, _ := store.Get(j.ID)
 						if currentJob != nil && currentJob.LastError != "" {
-							// Error was already saved by onFatalError callback, just update status
+							// Error was already saved by onFatalError callback, mark for finalization
 							ctxErr = jobCtx.Err()
-							stopOnce.Do(stopSyncFunc)
-							syncTicker.Stop()
-							<-syncDone
-							store.UpdateSendProgress(j.ID, sentRows.Load(), sentBatches.Load())
-							store.UpdateErrors(j.ID, processor.GetErrorsTotal(), sentErrors.Load())
-							store.UpdateStatus(j.ID, job.StatusFailed)
-							return
+							shouldFinalize = true
 						}
 						// No stored error, this is a normal cancel - continue to handle it in jobCtx.Done() case
 					} else {
@@ -488,15 +458,7 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 						errorMsg := fmt.Sprintf("failed to enqueue error batch %d: %v", errorBatch.BatchNo, err)
 						finalErr = fmt.Errorf(errorMsg)
 						ctxErr = jobCtx.Err()
-						// Stop ticker and sync counters before failing
-						stopOnce.Do(stopSyncFunc)
-						syncTicker.Stop()
-						<-syncDone
-						store.UpdateSendProgress(j.ID, sentRows.Load(), sentBatches.Load())
-						store.UpdateErrors(j.ID, processor.GetErrorsTotal(), sentErrors.Load())
-						store.UpdateError(j.ID, finalErr)
-						store.UpdateStatus(j.ID, job.StatusFailed)
-						return
+						shouldFinalize = true
 					}
 				}
 			}
@@ -506,29 +468,20 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 				log.Printf("Job %s: Processing error: %v", j.ID, err)
 				finalErr = err
 				ctxErr = jobCtx.Err()
-				// Stop ticker and sync counters before failing
-				stopOnce.Do(stopSyncFunc)
-				syncTicker.Stop()
-				<-syncDone
-				store.UpdateSendProgress(j.ID, sentRows.Load(), sentBatches.Load())
-				if asyncErrorSender != nil {
-					store.UpdateErrors(j.ID, processor.GetErrorsTotal(), sentErrors.Load())
-				}
-				store.UpdateError(j.ID, err)
-				store.UpdateStatus(j.ID, job.StatusFailed)
-				return
+				shouldFinalize = true
 			}
 			// Processing done, continue to process remaining batches and errors
 		}
 	}
 
-done:
+	// Common finalization block: always stop sync, wait for senders, then finalize status
 	// Stop periodic sync ticker
 	stopOnce.Do(stopSyncFunc)
 	syncTicker.Stop()
 	<-syncDone
 
 	// Wait for all async senders to finish and check for errors
+	// This ensures onFatalError callbacks have completed and errors are saved to store
 	var sendErr error
 	if err := asyncDataSender.CloseAndWait(); err != nil {
 		log.Printf("Job %s: Data sender error: %v", j.ID, err)
@@ -547,17 +500,9 @@ done:
 				}
 				errorMsg = fmt.Sprintf("failed to deliver error batch to %s: HTTP %d: %s", j.Delivery.ErrorsEndpoint, httpErr.StatusCode, bodySnippet)
 			}
-			finalErr = fmt.Errorf(errorMsg)
-			ctxErr = jobCtx.Err()
-			// Stop ticker and final sync before failing
-			stopOnce.Do(stopSyncFunc)
-			syncTicker.Stop()
-			<-syncDone
-			store.UpdateSendProgress(j.ID, sentRows.Load(), sentBatches.Load())
-			store.UpdateErrors(j.ID, processor.GetErrorsTotal(), sentErrors.Load())
-			store.UpdateError(j.ID, finalErr)
-			store.UpdateStatus(j.ID, job.StatusFailed)
-			return
+			if sendErr == nil {
+				sendErr = fmt.Errorf(errorMsg)
+			}
 		}
 	}
 
@@ -567,16 +512,15 @@ done:
 		store.UpdateErrors(j.ID, processor.GetErrorsTotal(), sentErrors.Load())
 	}
 
-	// Log timings summary (only if timings are enabled)
-	if timings != nil {
-		log.Printf("Job %s: Timings summary: %s", j.ID, timings.String())
-	}
-
-	// Check final status
+	// Now finalize status based on errors and context
 	ctxErr = jobCtx.Err()
 	if sendErr != nil {
 		finalErr = sendErr
 		store.UpdateError(j.ID, sendErr)
+		store.UpdateStatus(j.ID, job.StatusFailed)
+	} else if finalErr != nil {
+		// Processing error or enqueue error that wasn't fatal HTTP
+		store.UpdateError(j.ID, finalErr)
 		store.UpdateStatus(j.ID, job.StatusFailed)
 	} else if jobCtx.Err() == context.Canceled {
 		// If canceled but has lastError, treat as failed (fatal sender error)
@@ -587,7 +531,13 @@ done:
 			store.UpdateStatus(j.ID, job.StatusCanceled)
 		}
 	} else {
+		// Normal completion
 		log.Printf("Job %s: Completed successfully", j.ID)
 		store.UpdateStatus(j.ID, job.StatusSucceeded)
+	}
+
+	// Log timings summary (only if timings are enabled)
+	if timings != nil {
+		log.Printf("Job %s: Timings summary: %s", j.ID, timings.String())
 	}
 }

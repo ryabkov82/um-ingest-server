@@ -153,12 +153,14 @@ func TestFatalError406(t *testing.T) {
 		t.Fatalf("Failed to write CSV: %v", err)
 	}
 
-	// Create httptest server that returns 406 on first batch
+	// Create httptest server that returns 406 on first batch with delay
 	var requestCount int
 	dataServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestCount++
 		if requestCount == 1 {
-			// First batch returns 406 (Not Acceptable)
+			// First batch returns 406 (Not Acceptable) after delay
+			// This delay ensures that onFatalError/store.UpdateError completes before processJob exits
+			time.Sleep(75 * time.Millisecond) // 50-100ms delay
 			w.WriteHeader(http.StatusNotAcceptable) // 406
 			w.Write([]byte("Not Acceptable"))
 		} else {
