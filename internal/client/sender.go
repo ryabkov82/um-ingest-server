@@ -393,6 +393,8 @@ func (s *Sender) sendErrorBatchOnce(ctx context.Context, errorBatch *ingest.Erro
 	if errorBatch.BatchNo > 0 {
 		req.Header.Set("X-UM-BatchNo", fmt.Sprintf("%d", errorBatch.BatchNo))
 	}
+	// Set X-UM-RowsCount to the number of error items in the batch
+	req.Header.Set("X-UM-RowsCount", fmt.Sprintf("%d", len(errorBatch.Errors)))
 
 	// Send request
 	httpStart := time.Now()

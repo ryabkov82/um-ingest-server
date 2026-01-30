@@ -60,6 +60,9 @@ func TestErrorBatchHeaders(t *testing.T) {
 	if receivedHeaders.Get("X-UM-BatchNo") != "1" {
 		t.Errorf("Expected X-UM-BatchNo='1', got '%s'", receivedHeaders.Get("X-UM-BatchNo"))
 	}
+	if receivedHeaders.Get("X-UM-RowsCount") != "1" {
+		t.Errorf("Expected X-UM-RowsCount='1', got '%s'", receivedHeaders.Get("X-UM-RowsCount"))
+	}
 
 	// Check body
 	if receivedBody.PackageID != "test-pkg-123" {
