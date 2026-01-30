@@ -2,8 +2,10 @@ package client
 
 import (
 	"context"
+	"log"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/ryabkov82/um-ingest-server/internal/ingest"
 )
@@ -15,14 +17,16 @@ type OnErrorBatchSent func(errorBatch *ingest.ErrorBatch)
 // AsyncErrorSender wraps a Sender to provide asynchronous error batch sending with a bounded queue
 // Any error during sending will fail the job (errorsEndpoint delivery is required)
 type AsyncErrorSender struct {
-	base            *Sender
-	q               chan *ingest.ErrorBatch
-	wg              sync.WaitGroup
-	cancel          context.CancelFunc
-	errOnce         sync.Once
-	err             atomic.Value // stores error
-	ctx             context.Context
+	base             *Sender
+	q                chan *ingest.ErrorBatch
+	wg               sync.WaitGroup
+	cancel           context.CancelFunc
+	errOnce          sync.Once
+	err              atomic.Value // stores error
+	ctx              context.Context
 	onErrorBatchSent OnErrorBatchSent // callback after successful send
+	onFatalError     OnFatalError     // callback on fatal error (before cancel)
+	jobID            string           // job identifier for logging
 }
 
 // NewAsyncErrorSender creates a new AsyncErrorSender for error batches
@@ -30,15 +34,19 @@ type AsyncErrorSender struct {
 // queueSize: size of the bounded queue (must be > 0)
 // cancel: cancel function to call on fatal error
 // onErrorBatchSent: optional callback called after successful error batch send
-func NewAsyncErrorSender(base *Sender, queueSize int, cancel context.CancelFunc, onErrorBatchSent OnErrorBatchSent) *AsyncErrorSender {
+// onFatalError: optional callback called on fatal error (before cancel)
+// jobID: job identifier for logging
+func NewAsyncErrorSender(base *Sender, queueSize int, cancel context.CancelFunc, onErrorBatchSent OnErrorBatchSent, onFatalError OnFatalError, jobID string) *AsyncErrorSender {
 	if queueSize < 1 {
 		queueSize = 1
 	}
 	return &AsyncErrorSender{
 		base:             base,
-		q:                 make(chan *ingest.ErrorBatch, queueSize),
-		cancel:            cancel,
-		onErrorBatchSent:  onErrorBatchSent,
+		q:                make(chan *ingest.ErrorBatch, queueSize),
+		cancel:           cancel,
+		onErrorBatchSent: onErrorBatchSent,
+		onFatalError:     onFatalError,
+		jobID:            jobID,
 	}
 }
 
@@ -139,5 +147,25 @@ func (a *AsyncErrorSender) CloseAndWait() error {
 		}
 	}
 	return nil
+}
+
+// logFatalError logs fatal error with details
+func (a *AsyncErrorSender) logFatalError(batchNo int64, err error) {
+	var statusCode int
+	var retryAfter time.Duration
+	var body string
+
+	if httpErr, ok := GetHTTPError(err); ok {
+		statusCode = httpErr.StatusCode
+		retryAfter = httpErr.RetryAfter
+		body = httpErr.Body
+		// Truncate body to 2KB
+		if len(body) > 2048 {
+			body = body[:2048] + "..."
+		}
+	}
+
+	log.Printf("Job %s: Fatal error sending error batch %d: statusCode=%d retryAfter=%v body=%q",
+		a.jobID, batchNo, statusCode, retryAfter, body)
 }
 

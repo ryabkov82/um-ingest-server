@@ -2,8 +2,10 @@ package client
 
 import (
 	"context"
+	"log"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/ryabkov82/um-ingest-server/internal/ingest"
 )
@@ -12,16 +14,25 @@ import (
 // batch: the batch that was sent
 type OnBatchSent func(batch *ingest.Batch)
 
+// OnFatalError is called when a fatal error occurs (before cancel)
+// jobID: job identifier
+// batchNo: batch number (0 for error batches)
+// endpointType: "data" or "errors"
+// err: the fatal error
+type OnFatalError func(jobID string, batchNo int64, endpointType string, err error)
+
 // AsyncSender wraps a Sender to provide asynchronous batch sending with a bounded queue
 type AsyncSender struct {
-	base        *Sender
-	q           chan *ingest.Batch
-	wg          sync.WaitGroup
-	cancel      context.CancelFunc
-	errOnce     sync.Once
-	err         atomic.Value // stores error
-	ctx         context.Context
-	onBatchSent OnBatchSent // callback after successful send
+	base         *Sender
+	q            chan *ingest.Batch
+	wg           sync.WaitGroup
+	cancel       context.CancelFunc
+	errOnce      sync.Once
+	err          atomic.Value // stores error
+	ctx          context.Context
+	onBatchSent  OnBatchSent  // callback after successful send
+	onFatalError OnFatalError // callback on fatal error (before cancel)
+	jobID        string       // job identifier for logging
 }
 
 // NewAsyncSender creates a new AsyncSender
@@ -29,15 +40,19 @@ type AsyncSender struct {
 // queueSize: size of the bounded queue (must be > 0)
 // cancel: cancel function to call on fatal error
 // onBatchSent: optional callback called after successful batch send
-func NewAsyncSender(base *Sender, queueSize int, cancel context.CancelFunc, onBatchSent OnBatchSent) *AsyncSender {
+// onFatalError: optional callback called on fatal error (before cancel)
+// jobID: job identifier for logging
+func NewAsyncSender(base *Sender, queueSize int, cancel context.CancelFunc, onBatchSent OnBatchSent, onFatalError OnFatalError, jobID string) *AsyncSender {
 	if queueSize < 1 {
 		queueSize = 1
 	}
 	return &AsyncSender{
-		base:        base,
-		q:           make(chan *ingest.Batch, queueSize),
-		cancel:      cancel,
-		onBatchSent: onBatchSent,
+		base:         base,
+		q:            make(chan *ingest.Batch, queueSize),
+		cancel:       cancel,
+		onBatchSent:  onBatchSent,
+		onFatalError: onFatalError,
+		jobID:        jobID,
 	}
 }
 
@@ -85,14 +100,20 @@ func (a *AsyncSender) worker(ctx context.Context) {
 			}
 
 			if isFatal {
-				// Fatal error - store it and cancel context
+				// Fatal error - log, store it, save to store, then cancel context
 				a.errOnce.Do(func() {
 					a.err.Store(err)
+					// Log fatal error with details
+					a.logFatalError(batch.BatchNo, err)
+					// Call callback to save error in store (before cancel)
+					if a.onFatalError != nil {
+						a.onFatalError(a.jobID, batch.BatchNo, "data", err)
+					}
 					if a.cancel != nil {
 						a.cancel()
 					}
 				})
-				// Continue processing remaining batches in queue (they will see ctx.Done)
+				// Continue processing remaining batches in queue (they will see ctx.Done())
 			}
 			// Retryable errors are not stored - they will be retried by base.SendBatch
 		} else {
@@ -146,4 +167,24 @@ func (a *AsyncSender) CloseAndWait() error {
 		}
 	}
 	return nil
+}
+
+// logFatalError logs fatal error with details
+func (a *AsyncSender) logFatalError(batchNo int64, err error) {
+	var statusCode int
+	var retryAfter time.Duration
+	var body string
+
+	if httpErr, ok := GetHTTPError(err); ok {
+		statusCode = httpErr.StatusCode
+		retryAfter = httpErr.RetryAfter
+		body = httpErr.Body
+		// Truncate body to 2KB
+		if len(body) > 2048 {
+			body = body[:2048] + "..."
+		}
+	}
+
+	log.Printf("Job %s: Fatal error sending data batch %d: statusCode=%d retryAfter=%v body=%q",
+		a.jobID, batchNo, statusCode, retryAfter, body)
 }

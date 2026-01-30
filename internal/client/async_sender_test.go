@@ -46,7 +46,7 @@ func TestAsyncSenderFatalError(t *testing.T) {
 	defer cancel()
 
 	// Create async sender
-	asyncSender := NewAsyncSender(baseSender, 8, cancel, nil)
+	asyncSender := NewAsyncSender(baseSender, 8, cancel, nil, nil, "test-job")
 	asyncSender.Start(ctx, 1)
 
 	// Create a test batch
@@ -114,7 +114,7 @@ func TestAsyncSenderContextCancel(t *testing.T) {
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	asyncSender := NewAsyncSender(baseSender, 8, cancel, nil)
+	asyncSender := NewAsyncSender(baseSender, 8, cancel, nil, nil, "test-job")
 	asyncSender.Start(ctx, 1)
 
 	// Cancel context
@@ -170,7 +170,7 @@ func TestAsyncSenderMultipleBatches(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	asyncSender := NewAsyncSender(baseSender, 8, cancel, nil)
+	asyncSender := NewAsyncSender(baseSender, 8, cancel, nil, nil, "test-job")
 	asyncSender.Start(ctx, 1)
 
 	// Enqueue multiple batches

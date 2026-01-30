@@ -239,6 +239,11 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 			sentBatches.Add(1)
 			log.Printf("Job %s: Batch %d sent successfully (%d rows)", j.ID, batch.BatchNo, len(batch.Rows))
 		},
+		func(jobID string, batchNo int64, endpointType string, err error) {
+			// Callback on fatal error - save to store BEFORE cancel
+			store.UpdateError(j.ID, err)
+		},
+		j.ID,
 	)
 	asyncDataSender.Start(jobCtx, sendWorkers)
 
@@ -268,6 +273,11 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 				sentErrorBatches.Add(1)
 				log.Printf("Job %s: Error batch %d sent successfully (%d errors)", j.ID, errorBatch.BatchNo, len(errorBatch.Errors))
 			},
+			func(jobID string, batchNo int64, endpointType string, err error) {
+				// Callback on fatal error - save to store BEFORE cancel
+				store.UpdateError(j.ID, err)
+			},
+			j.ID,
 		)
 		asyncErrorSender.Start(jobCtx, errSendWorkers)
 	}
@@ -335,9 +345,26 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 
 			// Enqueue batch for async sending
 			if err := asyncDataSender.Enqueue(jobCtx, batch); err != nil {
-				log.Printf("Job %s: Batch %d enqueue error: %v", j.ID, batch.BatchNo, err)
-				// If enqueue failed due to fatal error, job will be canceled by async sender
-				if err != context.Canceled {
+				// If enqueue failed due to fatal error, error was already saved by onFatalError callback
+				if err == context.Canceled {
+					// Check if there's already an error in store (from fatal error that caused cancel)
+					// Don't overwrite it with context.Canceled
+					currentJob, _ := store.Get(j.ID)
+					if currentJob != nil && currentJob.LastError != "" {
+						// Error was already saved by onFatalError callback, just update status
+						stopOnce.Do(stopSyncFunc)
+						syncTicker.Stop()
+						<-syncDone
+						store.UpdateSendProgress(j.ID, sentRows.Load(), sentBatches.Load())
+						if asyncErrorSender != nil {
+							store.UpdateErrors(j.ID, processor.GetErrorsTotal(), sentErrors.Load())
+						}
+						store.UpdateStatus(j.ID, job.StatusFailed)
+						return
+					}
+					// No stored error, this is a normal cancel - continue to handle it in jobCtx.Done() case
+				} else {
+					log.Printf("Job %s: Batch %d enqueue error: %v", j.ID, batch.BatchNo, err)
 					// Check if error is fatal (4xx except 429)
 					if httpErr, ok := client.GetHTTPError(err); ok {
 						if httpErr.StatusCode >= 400 && httpErr.StatusCode < 500 && httpErr.StatusCode != 429 {
@@ -357,7 +384,7 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 						}
 					}
 				}
-				// Context canceled or retryable error, continue
+				// Context canceled (with no stored error) or retryable error, continue
 			}
 
 		case errorBatch, ok := <-errorChan:
@@ -392,9 +419,24 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 				}
 
 				if err := asyncErrorSender.Enqueue(jobCtx, errorBatch); err != nil {
-					log.Printf("Job %s: Error batch %d enqueue error: %v", j.ID, errorBatch.BatchNo, err)
-					// If enqueue failed, error batch delivery will fail job (handled in CloseAndWait)
-					if err != context.Canceled {
+					// If enqueue failed due to fatal error, error was already saved by onFatalError callback
+					if err == context.Canceled {
+						// Check if there's already an error in store (from fatal error that caused cancel)
+						// Don't overwrite it with context.Canceled
+						currentJob, _ := store.Get(j.ID)
+						if currentJob != nil && currentJob.LastError != "" {
+							// Error was already saved by onFatalError callback, just update status
+							stopOnce.Do(stopSyncFunc)
+							syncTicker.Stop()
+							<-syncDone
+							store.UpdateSendProgress(j.ID, sentRows.Load(), sentBatches.Load())
+							store.UpdateErrors(j.ID, processor.GetErrorsTotal(), sentErrors.Load())
+							store.UpdateStatus(j.ID, job.StatusFailed)
+							return
+						}
+						// No stored error, this is a normal cancel - continue to handle it in jobCtx.Done() case
+					} else {
+						log.Printf("Job %s: Error batch %d enqueue error: %v", j.ID, errorBatch.BatchNo, err)
 						// Format error message with details
 						errorMsg := fmt.Sprintf("failed to enqueue error batch %d: %v", errorBatch.BatchNo, err)
 						// Stop ticker and sync counters before failing
