@@ -183,6 +183,47 @@ func worker(ctx context.Context, store *job.Store, allowedBaseDir, env1CUser, en
 func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDir, env1CUser, env1CPass string, sendWorkers, sendQueue, errSendWorkers, errSendQueue int) {
 	debugErrors := os.Getenv("UM_DEBUG_ERRORS") == "1"
 
+	// Track final error and context error for logging
+	var finalErr error
+	var ctxErr error
+
+	// Defer log at exit (will execute on any return)
+	defer func() {
+		// Get final job state from store
+		finalJob, _ := store.Get(j.ID)
+		if finalJob == nil {
+			log.Printf("Job %s: exit (job not found in store)", j.ID)
+			return
+		}
+
+		// Determine exit reason
+		exitReason := ""
+		if ctxErr == context.Canceled && finalErr == nil {
+			exitReason = "job canceled: ctx canceled without error"
+		} else if finalErr != nil {
+			exitReason = fmt.Sprintf("job failed: err=%v", finalErr)
+		} else if finalJob.Status == job.StatusCanceled {
+			exitReason = "job canceled"
+		} else if finalJob.Status == job.StatusFailed {
+			exitReason = fmt.Sprintf("job failed: lastError=%q", finalJob.LastError)
+		} else if finalJob.Status == job.StatusSucceeded {
+			exitReason = "job succeeded"
+		}
+
+		// Log exit with all details
+		log.Printf("Job %s: exit status=%s err=%v ctxErr=%v lastError=%q rowsRead=%d rowsSent=%d currentBatchNo=%d reason=%s",
+			j.ID,
+			finalJob.Status,
+			finalErr,
+			ctxErr,
+			finalJob.LastError,
+			finalJob.RowsRead,
+			finalJob.RowsSent,
+			finalJob.CurrentBatchNo,
+			exitReason,
+		)
+	}()
+
 	// Create cancel context for this job from parent context
 	jobCtx, jobCancel := context.WithCancel(ctx)
 	defer jobCancel()
@@ -325,6 +366,7 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 		select {
 		case <-jobCtx.Done():
 			// Job was canceled - stop ticker, sync counters, then return
+			ctxErr = jobCtx.Err()
 			stopOnce.Do(stopSyncFunc)
 			syncTicker.Stop()
 			<-syncDone
@@ -353,6 +395,7 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 					currentJob, _ := store.Get(j.ID)
 					if currentJob != nil && currentJob.LastError != "" {
 						// Error was already saved by onFatalError callback, just update status
+						ctxErr = jobCtx.Err()
 						stopOnce.Do(stopSyncFunc)
 						syncTicker.Stop()
 						<-syncDone
@@ -370,7 +413,9 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 					if httpErr, ok := client.GetHTTPError(err); ok {
 						if httpErr.StatusCode >= 400 && httpErr.StatusCode < 500 && httpErr.StatusCode != 429 {
 							// Fatal error, cancel processing
+							finalErr = err
 							jobCancel()
+							ctxErr = jobCtx.Err()
 							// Stop ticker and sync counters before failing
 							stopOnce.Do(stopSyncFunc)
 							syncTicker.Stop()
@@ -427,6 +472,7 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 						currentJob, _ := store.Get(j.ID)
 						if currentJob != nil && currentJob.LastError != "" {
 							// Error was already saved by onFatalError callback, just update status
+							ctxErr = jobCtx.Err()
 							stopOnce.Do(stopSyncFunc)
 							syncTicker.Stop()
 							<-syncDone
@@ -440,13 +486,15 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 						log.Printf("Job %s: Error batch %d enqueue error: %v", j.ID, errorBatch.BatchNo, err)
 						// Format error message with details
 						errorMsg := fmt.Sprintf("failed to enqueue error batch %d: %v", errorBatch.BatchNo, err)
+						finalErr = fmt.Errorf(errorMsg)
+						ctxErr = jobCtx.Err()
 						// Stop ticker and sync counters before failing
 						stopOnce.Do(stopSyncFunc)
 						syncTicker.Stop()
 						<-syncDone
 						store.UpdateSendProgress(j.ID, sentRows.Load(), sentBatches.Load())
 						store.UpdateErrors(j.ID, processor.GetErrorsTotal(), sentErrors.Load())
-						store.UpdateError(j.ID, fmt.Errorf(errorMsg))
+						store.UpdateError(j.ID, finalErr)
 						store.UpdateStatus(j.ID, job.StatusFailed)
 						return
 					}
@@ -456,6 +504,8 @@ func processJob(ctx context.Context, j *job.Job, store *job.Store, allowedBaseDi
 		case err := <-processErrChan:
 			if err != nil && err != context.Canceled {
 				log.Printf("Job %s: Processing error: %v", j.ID, err)
+				finalErr = err
+				ctxErr = jobCtx.Err()
 				// Stop ticker and sync counters before failing
 				stopOnce.Do(stopSyncFunc)
 				syncTicker.Stop()
@@ -497,13 +547,15 @@ done:
 				}
 				errorMsg = fmt.Sprintf("failed to deliver error batch to %s: HTTP %d: %s", j.Delivery.ErrorsEndpoint, httpErr.StatusCode, bodySnippet)
 			}
+			finalErr = fmt.Errorf(errorMsg)
+			ctxErr = jobCtx.Err()
 			// Stop ticker and final sync before failing
 			stopOnce.Do(stopSyncFunc)
 			syncTicker.Stop()
 			<-syncDone
 			store.UpdateSendProgress(j.ID, sentRows.Load(), sentBatches.Load())
 			store.UpdateErrors(j.ID, processor.GetErrorsTotal(), sentErrors.Load())
-			store.UpdateError(j.ID, fmt.Errorf(errorMsg))
+			store.UpdateError(j.ID, finalErr)
 			store.UpdateStatus(j.ID, job.StatusFailed)
 			return
 		}
@@ -521,7 +573,9 @@ done:
 	}
 
 	// Check final status
+	ctxErr = jobCtx.Err()
 	if sendErr != nil {
+		finalErr = sendErr
 		store.UpdateError(j.ID, sendErr)
 		store.UpdateStatus(j.ID, job.StatusFailed)
 	} else if jobCtx.Err() == context.Canceled {
